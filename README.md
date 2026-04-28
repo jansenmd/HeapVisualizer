@@ -2,6 +2,10 @@
 
 HeapVisualizer is a Qt Widgets GUI application scaffold built with CMake.
 
+The project also builds `HeapAllocationTest`, a second Qt GUI application for manually allocating and freeing heap memory blocks. This will eventually provide test data for the main visualizer.
+
+On Linux, the project also builds `libheap_allocation_hooks.so`, an `LD_PRELOAD` shared library that hooks common libc allocation/deallocation entry points while the allocation test app runs. C++ heap allocations are still visible when the C++ runtime services them through those libc allocation functions.
+
 ## Version
 
 Current build version: `0.1.0`
@@ -32,3 +36,13 @@ All configurations:
 ```
 
 If CMake cannot find Qt, it prints target-specific instructions for installing the required Qt development resources.
+
+## Allocation Hook Test
+
+Launch the allocation test app with the preload library injected:
+
+```sh
+./scripts/run-allocation-test-preload.sh debug
+```
+
+Use `release` instead of `debug` to run the release build. The preload library prints a load message and allocation counter summary to stderr.

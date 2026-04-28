@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(HeapVisualizer VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -93,29 +93,79 @@ set(app_sources
     src/mainwindow.cpp
 )
 
+set(test_app_sources
+    src/allocationtest_main.cpp
+    src/allocationtestwindow.cpp
+)
+
 set(app_headers
     src/mainwindow.hpp
 )
 
+set(test_app_headers
+    src/allocationtestwindow.hpp
+)
+
+set(allocation_hook_sources
+    src/allocationhookfunctions.cpp
+    src/allocationhooks.cpp
+)
+
 if(WIN32)
     add_executable(HeapVisualizer WIN32 ${app_sources} ${app_headers})
+    add_executable(HeapAllocationTest WIN32 ${test_app_sources} ${test_app_headers})
 else()
     add_executable(HeapVisualizer ${app_sources} ${app_headers})
+    add_executable(HeapAllocationTest ${test_app_sources} ${test_app_headers})
 endif()
 
-target_include_directories(HeapVisualizer
-    PRIVATE
-        "${CMAKE_CURRENT_BINARY_DIR}/generated"
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(HeapAllocationHooks SHARED ${allocation_hook_sources})
+    set_target_properties(HeapAllocationHooks
+        PROPERTIES
+            AUTOMOC OFF
+            AUTORCC OFF
+            AUTOUIC OFF
+            OUTPUT_NAME "heap_allocation_hooks"
+    )
+endif()
+
+set(gui_targets
+    HeapVisualizer
+    HeapAllocationTest
 )
 
-target_link_libraries(HeapVisualizer PRIVATE ${QT_PACKAGE}::Widgets)
+foreach(target_name ${gui_targets})
+    target_include_directories(${target_name}
+        PRIVATE
+            "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
 
-target_compile_options(HeapVisualizer
-    PRIVATE
-        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
-        $<$<CXX_COMPILER_ID:MSVC>:/W4>
-)
+    target_link_libraries(${target_name} PRIVATE ${QT_PACKAGE}::Widgets)
+
+    target_compile_options(${target_name}
+        PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+            $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    )
+endforeach()
 
 if(MINGW)
-    target_link_options(HeapVisualizer PRIVATE -static-libgcc -static-libstdc++)
+    foreach(target_name ${gui_targets})
+        target_link_options(${target_name} PRIVATE -static-libgcc -static-libstdc++)
+    endforeach()
+endif()
+
+if(TARGET HeapAllocationHooks)
+    target_compile_options(HeapAllocationHooks
+        PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+            $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    )
+
+    target_link_options(HeapAllocationHooks
+        PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wl,-z,now>
+    )
+
 endif()

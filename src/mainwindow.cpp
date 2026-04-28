@@ -18,7 +18,7 @@
 //------------------------------------------------------------------------------
 //  Construct the main application window and initialize its menus.
 //------------------------------------------------------------------------------
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle(QStringLiteral("HeapVisualizer"));
@@ -34,17 +34,17 @@ MainWindow::MainWindow(QWidget *parent)
 //------------------------------------------------------------------------------
 void MainWindow::CreateMenus()
 {
-    QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
-    exitAction = fileMenu->addAction(tr("E&xit"));
-    exitAction->setShortcut(QKeySequence::Quit);
-    connect(exitAction, &QAction::triggered, this, []
+    QMenu* fileMenu = menuBar()->addMenu(tr("&File"));
+    mExitAction = fileMenu->addAction(tr("E&xit"));
+    mExitAction->setShortcut(QKeySequence::Quit);
+    connect(mExitAction, &QAction::triggered, this, []
     {
         QApplication::quit();
     });
 
-    QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
-    aboutAction = helpMenu->addAction(tr("&About"));
-    connect(aboutAction, &QAction::triggered, this, [this]
+    QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
+    mAboutAction = helpMenu->addAction(tr("&About"));
+    connect(mAboutAction, &QAction::triggered, this, [this]
     {
         ShowAboutDialog();
     });

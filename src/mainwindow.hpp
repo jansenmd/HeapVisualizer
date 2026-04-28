@@ -4,14 +4,15 @@
 
 class QAction;
 
-class MainWindow : public QMainWindow {
+class MainWindow : public QMainWindow
+{
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget* parent = nullptr);
 
 private:
     void CreateMenus();
     void ShowAboutDialog();
 
-    QAction *exitAction = nullptr;
-    QAction *aboutAction = nullptr;
+    QAction* mExitAction = nullptr;
+    QAction* mAboutAction = nullptr;
 };
