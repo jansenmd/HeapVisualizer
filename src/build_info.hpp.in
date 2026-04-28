@@ -1,0 +1,6 @@
+#pragma once
+
+namespace HeapVisualizer {
+inline constexpr auto BuildVersion = "@PROJECT_VERSION@";
+inline constexpr auto BuildDate = "@HEAPVISUALIZER_BUILD_DATE@";
+}

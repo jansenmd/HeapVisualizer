@@ -1,0 +1,66 @@
+{
+  "version": 4,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/linux-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/linux-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows-mingw-debug",
+      "displayName": "Windows Debug (MinGW-w64)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-mingw-debug",
+      "toolchainFile": "${sourceDir}/cmake/mingw-w64-x86_64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-mingw-release",
+      "displayName": "Windows Release (MinGW-w64)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-mingw-release",
+      "toolchainFile": "${sourceDir}/cmake/mingw-w64-x86_64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-linux-debug",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "build-linux-release",
+      "configurePreset": "linux-release"
+    },
+    {
+      "name": "build-windows-debug",
+      "configurePreset": "windows-mingw-debug"
+    },
+    {
+      "name": "build-windows-release",
+      "configurePreset": "windows-mingw-release"
+    }
+  ]
+}
