@@ -46,3 +46,12 @@ Launch the allocation test app with the preload library injected:
 ```
 
 Use `release` instead of `debug` to run the release build. The preload library prints a load message and allocation counter summary to stderr.
+
+The preload library also attempts to stream allocation snapshots once per second to `127.0.0.1:47329`. Override the destination with:
+
+```sh
+export HEAP_VISUALIZER_STREAM_HOST=127.0.0.1
+export HEAP_VISUALIZER_STREAM_PORT=47329
+```
+
+In `HeapVisualizer`, use `File -> Start Streaming` and enter the same IP address and port.

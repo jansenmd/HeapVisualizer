@@ -66,10 +66,22 @@ void AllocationTestWindow::CreateMenus()
 void AllocationTestWindow::CreateControls()
 {
     QWidget* centralWidget = new QWidget(this);
+    centralWidget->setObjectName(QStringLiteral("AllocationTestSurface"));
     QVBoxLayout* mainLayout = new QVBoxLayout(centralWidget);
+    mainLayout->setContentsMargins(24, 22, 24, 24);
+    mainLayout->setSpacing(14);
+
+    QLabel* titleLabel = new QLabel(tr("Heap Allocation Test"), centralWidget);
+    titleLabel->setObjectName(QStringLiteral("WindowTitle"));
+
+    QLabel* subtitleLabel = new QLabel(tr("Allocate and release memory blocks for stream testing"), centralWidget);
+    subtitleLabel->setObjectName(QStringLiteral("WindowSubtitle"));
 
     QGroupBox* allocationGroupBox = new QGroupBox(tr("Allocation"), centralWidget);
     QGridLayout* allocationLayout = new QGridLayout(allocationGroupBox);
+    allocationLayout->setContentsMargins(16, 24, 16, 16);
+    allocationLayout->setHorizontalSpacing(12);
+    allocationLayout->setVerticalSpacing(10);
 
     mAllocationSizeSpinBox = new QSpinBox(allocationGroupBox);
     mAllocationSizeSpinBox->setRange(1, 1024);
@@ -103,11 +115,15 @@ void AllocationTestWindow::CreateControls()
     mFreeSelectedButton = new QPushButton(tr("Free Selected"), centralWidget);
     mClearButton = new QPushButton(tr("Clear All"), centralWidget);
     mSummaryLabel = new QLabel(centralWidget);
+    mSummaryLabel->setObjectName(QStringLiteral("SummaryPanel"));
 
     QGridLayout* buttonLayout = new QGridLayout();
+    buttonLayout->setHorizontalSpacing(10);
     buttonLayout->addWidget(mFreeSelectedButton, 0, 0);
     buttonLayout->addWidget(mClearButton, 0, 1);
 
+    mainLayout->addWidget(titleLabel);
+    mainLayout->addWidget(subtitleLabel);
     mainLayout->addWidget(allocationGroupBox);
     mainLayout->addWidget(mAllocationListWidget, 1);
     mainLayout->addLayout(buttonLayout);

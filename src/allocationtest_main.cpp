@@ -1,4 +1,5 @@
 #include "allocationtestwindow.hpp"
+#include "appstyle.hpp"
 #include "build_info.hpp"
 
 #include <QApplication>
@@ -18,6 +19,7 @@ int main(int argc, char* argv[])
     QApplication application(argc, argv);
     QApplication::setApplicationName(QStringLiteral("HeapAllocationTest"));
     QApplication::setApplicationVersion(QString::fromUtf8(HeapVisualizer::BuildVersion));
+    HeapVisualizer::ApplyApplicationStyle(application);
 
     AllocationTestWindow window;
     window.show();

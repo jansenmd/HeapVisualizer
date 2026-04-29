@@ -89,26 +89,25 @@ configure_file(
 )
 
 set(app_sources
+    src/appstyle.cpp
     src/main.cpp
     src/mainwindow.cpp
 )
 
 set(test_app_sources
+    src/appstyle.cpp
     src/allocationtest_main.cpp
     src/allocationtestwindow.cpp
 )
 
 set(app_headers
+    src/appstyle.hpp
     src/mainwindow.hpp
 )
 
 set(test_app_headers
+    src/appstyle.hpp
     src/allocationtestwindow.hpp
-)
-
-set(allocation_hook_sources
-    src/allocationhookfunctions.cpp
-    src/allocationhooks.cpp
 )
 
 if(WIN32)
@@ -119,16 +118,7 @@ else()
     add_executable(HeapAllocationTest ${test_app_sources} ${test_app_headers})
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_library(HeapAllocationHooks SHARED ${allocation_hook_sources})
-    set_target_properties(HeapAllocationHooks
-        PROPERTIES
-            AUTOMOC OFF
-            AUTORCC OFF
-            AUTOUIC OFF
-            OUTPUT_NAME "heap_allocation_hooks"
-    )
-endif()
+add_subdirectory(src/Preload)
 
 set(gui_targets
     HeapVisualizer
@@ -156,16 +146,6 @@ if(MINGW)
     endforeach()
 endif()
 
-if(TARGET HeapAllocationHooks)
-    target_compile_options(HeapAllocationHooks
-        PRIVATE
-            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
-            $<$<CXX_COMPILER_ID:MSVC>:/W4>
-    )
-
-    target_link_options(HeapAllocationHooks
-        PRIVATE
-            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wl,-z,now>
-    )
-
+if(WIN32)
+    target_link_libraries(HeapVisualizer PRIVATE ws2_32)
 endif()

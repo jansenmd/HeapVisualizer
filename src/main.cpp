@@ -1,4 +1,5 @@
 #include "build_info.hpp"
+#include "appstyle.hpp"
 #include "mainwindow.hpp"
 
 #include <QApplication>
@@ -15,6 +16,7 @@ int main(int argc, char* argv[])
     QApplication application(argc, argv);
     QApplication::setApplicationName(QStringLiteral("HeapVisualizer"));
     QApplication::setApplicationVersion(QString::fromUtf8(HeapVisualizer::BuildVersion));
+    HeapVisualizer::ApplyApplicationStyle(application);
 
     MainWindow window;
     window.show();
