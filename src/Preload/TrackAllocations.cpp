@@ -42,8 +42,8 @@ struct AllocationPool
     unsigned long long mUntrackedDeallocations = 0;
 };
 
-constexpr std::size_t MainAllocationCapacity = 262144;
-constexpr std::size_t InternalAllocationCapacity = 4096;
+constexpr std::size_t MainAllocationCapacity = 0x40000;
+constexpr std::size_t InternalAllocationCapacity = 0x40000;
 constexpr char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
 constexpr char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
 constexpr std::uint32_t PoolIdentifierMain = 0;
