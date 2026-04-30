@@ -6,11 +6,13 @@
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QFrame>
 #include <QFontDatabase>
+#include <QGraphicsOpacityEffect>
 #include <QHeaderView>
 #include <QKeySequence>
 #include <QLabel>
@@ -25,6 +27,7 @@
 #include <QSplitter>
 #include <QString>
 #include <QPushButton>
+#include <QShortcut>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabWidget>
@@ -135,6 +138,82 @@ bool ReadUInt64(const std::string& data, std::size_t& offset, std::uint64_t& val
 
     offset += sizeof(std::uint64_t);
     return true;
+}
+
+
+//------------------------------------------------------------------------------
+// CopyTableSelectionToClipboard
+//------------------------------------------------------------------------------
+//  Copy selected table cells, or the current cell, as tab-separated text.
+//------------------------------------------------------------------------------
+void CopyTableSelectionToClipboard(QTableWidget* tableWidget)
+{
+    if (tableWidget == nullptr)
+    {
+        return;
+    }
+
+    QList<QTableWidgetSelectionRange> selectedRanges = tableWidget->selectedRanges();
+    if (selectedRanges.empty() && (tableWidget->currentItem() != nullptr))
+    {
+        const int currentRow = tableWidget->currentRow();
+        const int currentColumn = tableWidget->currentColumn();
+        selectedRanges.push_back(QTableWidgetSelectionRange(currentRow, currentColumn, currentRow, currentColumn));
+    }
+
+    if (selectedRanges.empty())
+    {
+        return;
+    }
+
+    QString text;
+    const QTableWidgetSelectionRange range = selectedRanges.front();
+    for (int row = range.topRow(); row <= range.bottomRow(); ++row)
+    {
+        if (row > range.topRow())
+        {
+            text += QLatin1Char('\n');
+        }
+
+        for (int column = range.leftColumn(); column <= range.rightColumn(); ++column)
+        {
+            if (column > range.leftColumn())
+            {
+                text += QLatin1Char('\t');
+            }
+
+            const QTableWidgetItem* item = tableWidget->item(row, column);
+            if (item != nullptr)
+            {
+                text += item->text();
+            }
+        }
+    }
+
+    QApplication::clipboard()->setText(text);
+}
+
+
+//------------------------------------------------------------------------------
+// ConfigureDataTableInteraction
+//------------------------------------------------------------------------------
+//  Configure table interaction for invisible selection and copy support.
+//------------------------------------------------------------------------------
+void ConfigureDataTableInteraction(QTableWidget* tableWidget)
+{
+    tableWidget->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    tableWidget->setSelectionBehavior(QAbstractItemView::SelectItems);
+    tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
+
+    QShortcut* copyShortcut = new QShortcut(QKeySequence::Copy, tableWidget);
+    QObject::connect(
+        copyShortcut,
+        &QShortcut::activated,
+        tableWidget,
+        [tableWidget]
+        {
+            CopyTableSelectionToClipboard(tableWidget);
+        });
 }
 
 
@@ -496,7 +575,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), QColor(QStringLiteral("#ffffff")));
 
-    QRect chartRect = rect().adjusted(42, 14, -42, -52);
+    QRect chartRect = rect().adjusted(52, 14, -52, -52);
     painter.setPen(QColor(QStringLiteral("#cfd8e3")));
     painter.drawRect(chartRect);
 
@@ -531,6 +610,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     painter.setPen(QColor(QStringLiteral("#536173")));
     QFont labelFont = painter.font();
     labelFont.setPointSize(std::max(7, labelFont.pointSize() - 2));
+    labelFont.setWeight(QFont::DemiBold);
     painter.setFont(labelFont);
 
     constexpr int tickCount = 5;
@@ -609,12 +689,18 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
         painter.drawPolyline(countPoints.data(), static_cast<int>(countPoints.size()));
     }
 
-    painter.setPen(QColor(QStringLiteral("#536173")));
+    QFont binLabelFont = painter.font();
+    binLabelFont.setWeight(QFont::DemiBold);
+    painter.setFont(binLabelFont);
     for (int binIndex = 0; binIndex < binCount; ++binIndex)
     {
         const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
         const int labelX = chartRect.left() + (binIndex * slotWidth);
         const QRect labelRect(labelX, chartRect.bottom() + 4, slotWidth, 18);
+        painter.setPen(
+            bin.mAllocationCount == 0
+                ? QColor(QStringLiteral("#9aa6b2"))
+                : QColor(QStringLiteral("#536173")));
         painter.drawText(
             labelRect,
             Qt::AlignTop | Qt::AlignHCenter,
@@ -647,6 +733,7 @@ void BinGraphWidget::UpdateBinControls()
         QCheckBox* checkBox = new QCheckBox(this);
         checkBox->setText(QString());
         checkBox->setToolTip(QStringLiteral("Show this bin in the graph"));
+        checkBox->setGraphicsEffect(new QGraphicsOpacityEffect(checkBox));
         connect(
             checkBox,
             &QCheckBox::toggled,
@@ -675,7 +762,7 @@ void BinGraphWidget::UpdateBinControls()
 
     mUpdatingCheckBoxes = true;
 
-    const QRect chartRect = rect().adjusted(42, 14, -42, -52);
+    const QRect chartRect = rect().adjusted(52, 14, -52, -52);
     const int binCount = static_cast<int>(mBins.size());
     const int slotWidth = binCount == 0 ? 1 : std::max(1, chartRect.width() / binCount);
 
@@ -695,6 +782,10 @@ void BinGraphWidget::UpdateBinControls()
         const int y = chartRect.bottom() + 22;
         checkBox->setProperty("binIndex", static_cast<int>(binIndex));
         checkBox->setChecked(!bin.mSuppressed);
+        if (QGraphicsOpacityEffect* opacityEffect = qobject_cast<QGraphicsOpacityEffect*>(checkBox->graphicsEffect()))
+        {
+            opacityEffect->setOpacity(bin.mAllocationCount == 0 ? 0.45 : 1.0);
+        }
         checkBox->setGeometry(x, y, 18, 18);
     }
 
@@ -715,11 +806,8 @@ MainWindow::MainWindow(QWidget* parent)
     QWidget* centralWidget = new QWidget(this);
     centralWidget->setObjectName(QStringLiteral("MainSurface"));
     QVBoxLayout* layout = new QVBoxLayout(centralWidget);
-    layout->setContentsMargins(28, 24, 28, 28);
-    layout->setSpacing(16);
-
-    QLabel* titleLabel = new QLabel(tr("Heap Visualizer"), centralWidget);
-    titleLabel->setObjectName(QStringLiteral("WindowTitle"));
+    layout->setContentsMargins(14, 12, 14, 14);
+    layout->setSpacing(10);
 
     mViewTabs = new QTabWidget(centralWidget);
     mViewTabs->setObjectName(QStringLiteral("MainTabs"));
@@ -731,9 +819,9 @@ MainWindow::MainWindow(QWidget* parent)
     mOverviewTable->setColumnCount(2);
     mOverviewTable->setHorizontalHeaderLabels({tr("Metric"), tr("Value")});
     mOverviewTable->horizontalHeader()->setStretchLastSection(true);
+    mOverviewTable->setColumnWidth(0, 220);
     mOverviewTable->verticalHeader()->setVisible(false);
-    mOverviewTable->setSelectionMode(QAbstractItemView::NoSelection);
-    mOverviewTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    ConfigureDataTableInteraction(mOverviewTable);
     overviewLayout->addWidget(mOverviewTable);
 
     QWidget* binsWidget = new QWidget(mViewTabs);
@@ -755,8 +843,7 @@ MainWindow::MainWindow(QWidget* parent)
         {tr("Range"), tr("Allocations"), tr("Bytes"), tr("Min"), tr("Max"), tr("Average")});
     mBinsTable->horizontalHeader()->setStretchLastSection(true);
     mBinsTable->verticalHeader()->setVisible(false);
-    mBinsTable->setSelectionMode(QAbstractItemView::NoSelection);
-    mBinsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    ConfigureDataTableInteraction(mBinsTable);
     binsSplitter->addWidget(mBinsGraphWidget);
     binsSplitter->addWidget(mBinsTable);
     binsSplitter->setStretchFactor(0, 3);
@@ -776,7 +863,6 @@ MainWindow::MainWindow(QWidget* parent)
     mViewTabs->addTab(binsWidget, tr("Bins"));
     mViewTabs->addTab(heatmapWidget, tr("Heatmap"));
 
-    layout->addWidget(titleLabel);
     layout->addWidget(mViewTabs, 1);
     setCentralWidget(centralWidget);
     UpdateStreamingSummary({});
@@ -1401,12 +1487,14 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
         QTableWidgetItem* rangeItem = new QTableWidgetItem(QString::fromStdString(rangeText.str()));
         QTableWidgetItem* countItem = new QTableWidgetItem(
             QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mAllocationCount)));
-        QTableWidgetItem* bytesItem = new QTableWidgetItem(QString::fromStdString(BuildByteCountText(bin.mAllocationBytes)));
+        QTableWidgetItem* bytesItem = new QTableWidgetItem(
+            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mAllocationBytes)));
         QTableWidgetItem* minimumItem = new QTableWidgetItem(
-            QString::fromStdString(BuildByteCountText(bin.mMinimumAllocationSize)));
+            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMinimumAllocationSize)));
         QTableWidgetItem* maximumItem = new QTableWidgetItem(
-            QString::fromStdString(BuildByteCountText(bin.mMaximumAllocationSize)));
-        QTableWidgetItem* averageItem = new QTableWidgetItem(QString::fromStdString(BuildByteCountText(averageBytes)));
+            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMaximumAllocationSize)));
+        QTableWidgetItem* averageItem = new QTableWidgetItem(
+            QString::fromStdString(BuildCommaSeparatedIntegerText(averageBytes)));
 
         rangeItem->setFlags(rangeItem->flags() & ~Qt::ItemIsEditable);
         countItem->setFlags(countItem->flags() & ~Qt::ItemIsEditable);
@@ -1414,6 +1502,17 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
         minimumItem->setFlags(minimumItem->flags() & ~Qt::ItemIsEditable);
         maximumItem->setFlags(maximumItem->flags() & ~Qt::ItemIsEditable);
         averageItem->setFlags(averageItem->flags() & ~Qt::ItemIsEditable);
+
+        if (bin.mAllocationCount == 0)
+        {
+            const QBrush emptyBinTextBrush(QColor(QStringLiteral("#9aa6b2")));
+            rangeItem->setForeground(emptyBinTextBrush);
+            countItem->setForeground(emptyBinTextBrush);
+            bytesItem->setForeground(emptyBinTextBrush);
+            minimumItem->setForeground(emptyBinTextBrush);
+            maximumItem->setForeground(emptyBinTextBrush);
+            averageItem->setForeground(emptyBinTextBrush);
+        }
 
         mBinsTable->setItem(row, 0, rangeItem);
         mBinsTable->setItem(row, 1, countItem);

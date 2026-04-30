@@ -95,6 +95,17 @@ void ApplyApplicationStyle(QApplication& application)
             gridline-color: #e3e9f0;
         }
 
+        QTableWidget::item:selected
+        {
+            background: transparent;
+            color: #172033;
+        }
+
+        QTableWidget::item:focus
+        {
+            outline: none;
+        }
+
         QHeaderView::section
         {
             background: #edf3fa;
