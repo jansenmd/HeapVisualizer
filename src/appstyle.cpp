@@ -58,6 +58,53 @@ void ApplyApplicationStyle(QApplication& application)
             padding: 18px 20px;
         }
 
+        QTabWidget::pane
+        {
+            background: #ffffff;
+            border: 1px solid #cfd8e3;
+            border-radius: 8px;
+            top: -1px;
+        }
+
+        QTabBar::tab
+        {
+            background: #e4eaf1;
+            border: 1px solid #c6d0dc;
+            border-bottom: none;
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+            color: #26364f;
+            font-weight: 600;
+            margin-right: 4px;
+            min-width: 96px;
+            padding: 8px 14px;
+        }
+
+        QTabBar::tab:selected
+        {
+            background: #ffffff;
+            color: #0f4fa8;
+        }
+
+        QTableWidget
+        {
+            background: #ffffff;
+            border: 1px solid #cfd8e3;
+            border-radius: 8px;
+            color: #172033;
+            gridline-color: #e3e9f0;
+        }
+
+        QHeaderView::section
+        {
+            background: #edf3fa;
+            border: none;
+            border-right: 1px solid #d5dee9;
+            color: #26364f;
+            font-weight: 700;
+            padding: 8px;
+        }
+
         QMenuBar
         {
             background: #172033;

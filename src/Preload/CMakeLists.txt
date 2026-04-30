@@ -13,7 +13,10 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
             AUTORCC OFF
             AUTOUIC OFF
             CXX_VISIBILITY_PRESET hidden
+            ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
             OUTPUT_NAME "heap_allocation_hooks"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
             VISIBILITY_INLINES_HIDDEN YES
     )
 
