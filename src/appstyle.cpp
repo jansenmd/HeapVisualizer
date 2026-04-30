@@ -105,6 +105,18 @@ void ApplyApplicationStyle(QApplication& application)
             padding: 8px;
         }
 
+        QSplitter#BinsSplitter::handle
+        {
+            background: #d5dee9;
+            border-radius: 3px;
+            margin: 5px 120px;
+        }
+
+        QSplitter#BinsSplitter::handle:hover
+        {
+            background: #8fb8ea;
+        }
+
         QMenuBar
         {
             background: #172033;

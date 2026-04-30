@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -21,6 +22,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QSpinBox>
+#include <QSplitter>
 #include <QString>
 #include <QPushButton>
 #include <QTableWidget>
@@ -31,7 +33,6 @@
 
 #include <array>
 #include <algorithm>
-#include <charconv>
 #include <cstdint>
 #include <chrono>
 #include <cstring>
@@ -64,6 +65,11 @@ using NativeSocket = int;
 constexpr NativeSocket InvalidSocket = -1;
 #endif
 
+constexpr char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
+constexpr char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
+constexpr std::uint32_t PoolIdentifierMain = 0;
+constexpr std::uint32_t PoolIdentifierInternal = 1;
+
 
 //------------------------------------------------------------------------------
 // ToNativeSocket
@@ -84,6 +90,51 @@ NativeSocket ToNativeSocket(std::uintptr_t socketValue)
 std::uintptr_t FromNativeSocket(NativeSocket socketValue)
 {
     return static_cast<std::uintptr_t>(socketValue);
+}
+
+
+//------------------------------------------------------------------------------
+// ReadUInt32
+//------------------------------------------------------------------------------
+//  Read a 32-bit little-endian unsigned integer from a binary buffer.
+//------------------------------------------------------------------------------
+bool ReadUInt32(const std::string& data, std::size_t& offset, std::uint32_t& value)
+{
+    if ((offset > data.size()) || ((data.size() - offset) < sizeof(std::uint32_t)))
+    {
+        return false;
+    }
+
+    value = static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset])) |
+            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 1])) << 8U) |
+            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 2])) << 16U) |
+            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 3])) << 24U);
+    offset += sizeof(std::uint32_t);
+    return true;
+}
+
+
+//------------------------------------------------------------------------------
+// ReadUInt64
+//------------------------------------------------------------------------------
+//  Read a 64-bit little-endian unsigned integer from a binary buffer.
+//------------------------------------------------------------------------------
+bool ReadUInt64(const std::string& data, std::size_t& offset, std::uint64_t& value)
+{
+    if ((offset > data.size()) || ((data.size() - offset) < sizeof(std::uint64_t)))
+    {
+        return false;
+    }
+
+    value = 0;
+    for (std::size_t byteIndex = 0; byteIndex < sizeof(std::uint64_t); ++byteIndex)
+    {
+        value |= static_cast<std::uint64_t>(static_cast<unsigned char>(data[offset + byteIndex])) <<
+                 (byteIndex * 8U);
+    }
+
+    offset += sizeof(std::uint64_t);
+    return true;
 }
 
 
@@ -322,6 +373,51 @@ std::string BuildBinLimitLabel(std::size_t byteCount)
 
 
 //------------------------------------------------------------------------------
+// BuildByteTickLabel
+//------------------------------------------------------------------------------
+//  Build display text for byte-axis tick marks with decimal precision.
+//------------------------------------------------------------------------------
+std::string BuildByteTickLabel(std::size_t byteCount)
+{
+    constexpr std::size_t kilobyte = 1024;
+    constexpr std::size_t megabyte = kilobyte * 1024;
+    constexpr std::size_t gigabyte = megabyte * 1024;
+
+    const char* suffix = "B";
+    double value = static_cast<double>(byteCount);
+
+    if (byteCount >= gigabyte)
+    {
+        suffix = "GB";
+        value /= static_cast<double>(gigabyte);
+    }
+    else if (byteCount >= megabyte)
+    {
+        suffix = "MB";
+        value /= static_cast<double>(megabyte);
+    }
+    else if (byteCount >= kilobyte)
+    {
+        suffix = "KB";
+        value /= static_cast<double>(kilobyte);
+    }
+
+    std::ostringstream output;
+    if (byteCount >= kilobyte)
+    {
+        output << std::fixed << std::setprecision(1) << value;
+    }
+    else
+    {
+        output << static_cast<std::size_t>(value);
+    }
+
+    output << suffix;
+    return output.str();
+}
+
+
+//------------------------------------------------------------------------------
 // SetTableRow
 //------------------------------------------------------------------------------
 //  Set a two-column table row using non-editable cells.
@@ -357,7 +453,7 @@ void SetTableRow(QTableWidget* tableWidget,
 BinGraphWidget::BinGraphWidget(QWidget* parent)
     : QWidget(parent)
 {
-    setMinimumHeight(220);
+    setMinimumHeight(250);
     setObjectName(QStringLiteral("BinGraph"));
 }
 
@@ -370,7 +466,20 @@ BinGraphWidget::BinGraphWidget(QWidget* parent)
 void BinGraphWidget::SetBins(const std::vector<StreamedAllocationBin>& bins)
 {
     mBins = bins;
+    UpdateBinControls();
     update();
+}
+
+
+//------------------------------------------------------------------------------
+// SetSuppressionChangedHandler
+//------------------------------------------------------------------------------
+//  Set the callback used when a graph bin checkbox is toggled.
+//------------------------------------------------------------------------------
+void BinGraphWidget::SetSuppressionChangedHandler(
+    std::function<void(std::size_t minimumSize, std::size_t maximumSize, bool suppressed)> handler)
+{
+    mSuppressionChangedHandler = std::move(handler);
 }
 
 
@@ -387,7 +496,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), QColor(QStringLiteral("#ffffff")));
 
-    QRect chartRect = rect().adjusted(82, 18, -82, -48);
+    QRect chartRect = rect().adjusted(42, 14, -42, -52);
     painter.setPen(QColor(QStringLiteral("#cfd8e3")));
     painter.drawRect(chartRect);
 
@@ -402,8 +511,11 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     std::size_t maximumAllocations = 0;
     for (const StreamedAllocationBin& bin : mBins)
     {
-        maximumBytes = std::max(maximumBytes, bin.mAllocationBytes);
-        maximumAllocations = std::max(maximumAllocations, bin.mAllocationCount);
+        if (!bin.mSuppressed)
+        {
+            maximumBytes = std::max(maximumBytes, bin.mAllocationBytes);
+            maximumAllocations = std::max(maximumAllocations, bin.mAllocationCount);
+        }
     }
 
     if (maximumBytes == 0)
@@ -416,6 +528,40 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
         maximumAllocations = 1;
     }
 
+    painter.setPen(QColor(QStringLiteral("#536173")));
+    QFont labelFont = painter.font();
+    labelFont.setPointSize(std::max(7, labelFont.pointSize() - 2));
+    painter.setFont(labelFont);
+
+    constexpr int tickCount = 5;
+    for (int tickIndex = 0; tickIndex < tickCount; ++tickIndex)
+    {
+        const double scale = static_cast<double>(tickIndex) / static_cast<double>(tickCount - 1);
+        const int y = chartRect.bottom() -
+                      static_cast<int>(scale * static_cast<double>(chartRect.height()));
+        const auto allocationTickValue = static_cast<unsigned long long>(
+            (static_cast<double>(maximumAllocations) * scale) + 0.5);
+        const std::size_t byteTickValue = static_cast<std::size_t>(
+            (static_cast<double>(maximumBytes) * scale) + 0.5);
+
+        painter.setPen(QColor(QStringLiteral("#e2e8f0")));
+        painter.drawLine(chartRect.left(), y, chartRect.right(), y);
+
+        painter.setPen(QColor(QStringLiteral("#dc2626")));
+        painter.drawLine(chartRect.left() - 5, y, chartRect.left(), y);
+        painter.drawText(
+            QRect(rect().left() + 2, y - 8, chartRect.left() - rect().left() - 9, 16),
+            Qt::AlignRight | Qt::AlignVCenter,
+            QString::fromStdString(BuildCommaSeparatedIntegerText(allocationTickValue)));
+
+        painter.setPen(QColor(QStringLiteral("#2f80ed")));
+        painter.drawLine(chartRect.right(), y, chartRect.right() + 5, y);
+        painter.drawText(
+            QRect(chartRect.right() + 7, y - 8, rect().right() - chartRect.right() - 9, 16),
+            Qt::AlignLeft | Qt::AlignVCenter,
+            QString::fromStdString(BuildByteTickLabel(byteTickValue)));
+    }
+
     const int binCount = static_cast<int>(mBins.size());
     const int slotWidth = std::max(1, chartRect.width() / binCount);
     const int barWidth = std::max(3, slotWidth - 6);
@@ -426,7 +572,8 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     for (int binIndex = 0; binIndex < binCount; ++binIndex)
     {
         const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
-        const double normalizedHeight = static_cast<double>(bin.mAllocationBytes) /
+        const std::size_t allocationBytes = bin.mSuppressed ? 0 : bin.mAllocationBytes;
+        const double normalizedHeight = static_cast<double>(allocationBytes) /
                                         static_cast<double>(maximumBytes);
         const int barHeight = static_cast<int>(normalizedHeight * static_cast<double>(chartRect.height()));
         const int x = chartRect.left() + (binIndex * slotWidth) + ((slotWidth - barWidth) / 2);
@@ -440,7 +587,8 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     for (int binIndex = 0; binIndex < binCount; ++binIndex)
     {
         const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
-        const double normalizedHeight = static_cast<double>(bin.mAllocationCount) /
+        const std::size_t allocationCount = bin.mSuppressed ? 0 : bin.mAllocationCount;
+        const double normalizedHeight = static_cast<double>(allocationCount) /
                                         static_cast<double>(maximumAllocations);
         const int x = chartRect.left() + (binIndex * slotWidth) + (slotWidth / 2);
         const int y = chartRect.bottom() -
@@ -462,25 +610,6 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     }
 
     painter.setPen(QColor(QStringLiteral("#536173")));
-    QFont labelFont = painter.font();
-    labelFont.setPointSize(std::max(7, labelFont.pointSize() - 2));
-    painter.setFont(labelFont);
-
-    painter.setPen(QColor(QStringLiteral("#dc2626")));
-    QRect countScaleRect(rect().left() + 8, chartRect.top() - 2, chartRect.left() - rect().left() - 14, 22);
-    painter.drawText(
-        countScaleRect,
-        Qt::AlignRight | Qt::AlignVCenter,
-        QString::fromStdString(BuildCommaSeparatedIntegerText(maximumAllocations)));
-
-    painter.setPen(QColor(QStringLiteral("#2f80ed")));
-    QRect byteScaleRect(chartRect.right() + 8, chartRect.top() - 2, rect().right() - chartRect.right() - 14, 22);
-    painter.drawText(
-        byteScaleRect,
-        Qt::AlignLeft | Qt::AlignVCenter,
-        QString::fromStdString(BuildBinLimitLabel(maximumBytes)));
-
-    painter.setPen(QColor(QStringLiteral("#536173")));
     for (int binIndex = 0; binIndex < binCount; ++binIndex)
     {
         const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
@@ -491,6 +620,85 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
             Qt::AlignTop | Qt::AlignHCenter,
             QString::fromStdString(BuildBinLimitLabel(bin.mMaximumSize)));
     }
+}
+
+
+//------------------------------------------------------------------------------
+// resizeEvent
+//------------------------------------------------------------------------------
+//  Reposition bin graph checkboxes when the chart widget changes size.
+//------------------------------------------------------------------------------
+void BinGraphWidget::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    UpdateBinControls();
+}
+
+
+//------------------------------------------------------------------------------
+// UpdateBinControls
+//------------------------------------------------------------------------------
+//  Create and position graph visibility checkboxes beneath each bin column.
+//------------------------------------------------------------------------------
+void BinGraphWidget::UpdateBinControls()
+{
+    while (mBinCheckBoxes.size() < mBins.size())
+    {
+        QCheckBox* checkBox = new QCheckBox(this);
+        checkBox->setText(QString());
+        checkBox->setToolTip(QStringLiteral("Show this bin in the graph"));
+        connect(
+            checkBox,
+            &QCheckBox::toggled,
+            this,
+            [this, checkBox](bool checked)
+            {
+                if (mUpdatingCheckBoxes)
+                {
+                    return;
+                }
+
+                const int binIndex = checkBox->property("binIndex").toInt();
+                if ((binIndex < 0) || (binIndex >= static_cast<int>(mBins.size())))
+                {
+                    return;
+                }
+
+                const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
+                if (mSuppressionChangedHandler)
+                {
+                    mSuppressionChangedHandler(bin.mMinimumSize, bin.mMaximumSize, !checked);
+                }
+            });
+        mBinCheckBoxes.push_back(checkBox);
+    }
+
+    mUpdatingCheckBoxes = true;
+
+    const QRect chartRect = rect().adjusted(42, 14, -42, -52);
+    const int binCount = static_cast<int>(mBins.size());
+    const int slotWidth = binCount == 0 ? 1 : std::max(1, chartRect.width() / binCount);
+
+    for (std::size_t binIndex = 0; binIndex < mBinCheckBoxes.size(); ++binIndex)
+    {
+        QCheckBox* checkBox = mBinCheckBoxes[binIndex];
+        const bool binVisible = binIndex < mBins.size();
+        checkBox->setVisible(binVisible);
+
+        if (!binVisible)
+        {
+            continue;
+        }
+
+        const StreamedAllocationBin& bin = mBins[binIndex];
+        const int x = chartRect.left() + (static_cast<int>(binIndex) * slotWidth) + ((slotWidth - 18) / 2);
+        const int y = chartRect.bottom() + 22;
+        checkBox->setProperty("binIndex", static_cast<int>(binIndex));
+        checkBox->setChecked(!bin.mSuppressed);
+        checkBox->setGeometry(x, y, 18, 18);
+    }
+
+    mUpdatingCheckBoxes = false;
 }
 
 
@@ -510,11 +718,8 @@ MainWindow::MainWindow(QWidget* parent)
     layout->setContentsMargins(28, 24, 28, 28);
     layout->setSpacing(16);
 
-    QLabel* titleLabel = new QLabel(tr("HeapVisualizer"), centralWidget);
+    QLabel* titleLabel = new QLabel(tr("Heap Visualizer"), centralWidget);
     titleLabel->setObjectName(QStringLiteral("WindowTitle"));
-
-    QLabel* subtitleLabel = new QLabel(tr("Live heap allocation stream summary"), centralWidget);
-    subtitleLabel->setObjectName(QStringLiteral("WindowSubtitle"));
 
     mViewTabs = new QTabWidget(centralWidget);
     mViewTabs->setObjectName(QStringLiteral("MainTabs"));
@@ -534,9 +739,17 @@ MainWindow::MainWindow(QWidget* parent)
     QWidget* binsWidget = new QWidget(mViewTabs);
     QVBoxLayout* binsLayout = new QVBoxLayout(binsWidget);
     binsLayout->setContentsMargins(0, 0, 0, 0);
-    binsLayout->setSpacing(12);
-    mBinsGraphWidget = new BinGraphWidget(binsWidget);
-    mBinsTable = new QTableWidget(binsWidget);
+    binsLayout->setSpacing(0);
+    QSplitter* binsSplitter = new QSplitter(Qt::Vertical, binsWidget);
+    binsSplitter->setObjectName(QStringLiteral("BinsSplitter"));
+    binsSplitter->setChildrenCollapsible(false);
+    mBinsGraphWidget = new BinGraphWidget(binsSplitter);
+    mBinsGraphWidget->SetSuppressionChangedHandler(
+        [this](std::size_t minimumSize, std::size_t maximumSize, bool suppressed)
+        {
+            UpdateSuppressedBinState(minimumSize, maximumSize, suppressed);
+        });
+    mBinsTable = new QTableWidget(binsSplitter);
     mBinsTable->setColumnCount(6);
     mBinsTable->setHorizontalHeaderLabels(
         {tr("Range"), tr("Allocations"), tr("Bytes"), tr("Min"), tr("Max"), tr("Average")});
@@ -544,8 +757,12 @@ MainWindow::MainWindow(QWidget* parent)
     mBinsTable->verticalHeader()->setVisible(false);
     mBinsTable->setSelectionMode(QAbstractItemView::NoSelection);
     mBinsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    binsLayout->addWidget(mBinsGraphWidget);
-    binsLayout->addWidget(mBinsTable, 1);
+    binsSplitter->addWidget(mBinsGraphWidget);
+    binsSplitter->addWidget(mBinsTable);
+    binsSplitter->setStretchFactor(0, 3);
+    binsSplitter->setStretchFactor(1, 2);
+    binsSplitter->setSizes({360, 240});
+    binsLayout->addWidget(binsSplitter);
 
     QWidget* heatmapWidget = new QWidget(mViewTabs);
     QVBoxLayout* heatmapLayout = new QVBoxLayout(heatmapWidget);
@@ -560,7 +777,6 @@ MainWindow::MainWindow(QWidget* parent)
     mViewTabs->addTab(heatmapWidget, tr("Heatmap"));
 
     layout->addWidget(titleLabel);
-    layout->addWidget(subtitleLabel);
     layout->addWidget(mViewTabs, 1);
     setCentralWidget(centralWidget);
     UpdateStreamingSummary({});
@@ -787,81 +1003,85 @@ void MainWindow::StreamingThreadMain(std::uintptr_t listenSocketValue)
 //------------------------------------------------------------------------------
 void MainWindow::ParseStreamingData(const std::string& data)
 {
-    std::istringstream input(data);
-    std::string line;
     StreamedHeapSnapshot snapshot;
+    std::size_t offset = 0;
 
-    while (std::getline(input, line))
+    if ((data.size() < sizeof(SnapshotMagic)) ||
+        (std::memcmp(data.data(), SnapshotMagic, sizeof(SnapshotMagic)) != 0))
     {
-        std::istringstream lineInput(line);
-        std::string token;
-        lineInput >> token;
+        return;
+    }
 
-        if (token == "POOL")
+    offset += sizeof(SnapshotMagic);
+
+    std::uint32_t poolCount = 0;
+    if (!ReadUInt32(data, offset, poolCount))
+    {
+        return;
+    }
+
+    for (std::uint32_t poolIndex = 0; poolIndex < poolCount; ++poolIndex)
+    {
+        std::uint32_t poolIdentifier = 0;
+        std::uint64_t allocationCount = 0;
+        std::uint64_t allocationBytes = 0;
+        std::uint64_t trackedAllocations = 0;
+        std::uint64_t trackedDeallocations = 0;
+        std::uint64_t untrackedAllocations = 0;
+        std::uint64_t untrackedDeallocations = 0;
+
+        if ((!ReadUInt32(data, offset, poolIdentifier)) ||
+            (!ReadUInt64(data, offset, allocationCount)) ||
+            (!ReadUInt64(data, offset, allocationBytes)) ||
+            (!ReadUInt64(data, offset, trackedAllocations)) ||
+            (!ReadUInt64(data, offset, trackedDeallocations)) ||
+            (!ReadUInt64(data, offset, untrackedAllocations)) ||
+            (!ReadUInt64(data, offset, untrackedDeallocations)))
         {
-            std::string pool;
-            std::size_t allocationCount = 0;
-            std::size_t allocationBytes = 0;
-            unsigned long long trackedAllocations = 0;
-            unsigned long long trackedDeallocations = 0;
-            unsigned long long untrackedAllocations = 0;
-            unsigned long long untrackedDeallocations = 0;
-            lineInput >> pool >> allocationCount >> allocationBytes >> trackedAllocations;
-
-            if (lineInput.fail())
-            {
-                continue;
-            }
-
-            if (!(lineInput >> trackedDeallocations))
-            {
-                trackedDeallocations = 0;
-                lineInput.clear();
-            }
-
-            if (!(lineInput >> untrackedAllocations))
-            {
-                untrackedAllocations = 0;
-                lineInput.clear();
-            }
-
-            if (!(lineInput >> untrackedDeallocations))
-            {
-                untrackedDeallocations = 0;
-                lineInput.clear();
-            }
-
-            snapshot.mAllocationCount += allocationCount;
-            snapshot.mAllocationBytes += allocationBytes;
-            snapshot.mTrackedAllocations += trackedAllocations;
-            snapshot.mTrackedDeallocations += trackedDeallocations;
-            snapshot.mUntrackedAllocations += untrackedAllocations;
-            snapshot.mUntrackedDeallocations += untrackedDeallocations;
+            return;
         }
 
-        if (token == "ALLOC")
+        std::string poolName;
+        if (poolIdentifier == PoolIdentifierMain)
         {
-            std::string pool;
-            std::string addressText;
-            std::size_t size = 0;
-            lineInput >> pool >> addressText >> size;
-
-            if (lineInput.fail())
-            {
-                continue;
-            }
-
-            std::uintptr_t address = 0;
-            const char* begin = addressText.data();
-            const char* end = begin + addressText.size();
-            const std::from_chars_result result = std::from_chars(begin, end, address, 16);
-            if (result.ec != std::errc())
-            {
-                continue;
-            }
-
-            snapshot.mAllocations.push_back({pool, address, size});
+            poolName = "main";
         }
+        else if (poolIdentifier == PoolIdentifierInternal)
+        {
+            poolName = "internal";
+        }
+        else
+        {
+            return;
+        }
+
+        snapshot.mAllocationCount += static_cast<std::size_t>(allocationCount);
+        snapshot.mAllocationBytes += static_cast<std::size_t>(allocationBytes);
+        snapshot.mTrackedAllocations += static_cast<unsigned long long>(trackedAllocations);
+        snapshot.mTrackedDeallocations += static_cast<unsigned long long>(trackedDeallocations);
+        snapshot.mUntrackedAllocations += static_cast<unsigned long long>(untrackedAllocations);
+        snapshot.mUntrackedDeallocations += static_cast<unsigned long long>(untrackedDeallocations);
+
+        for (std::uint64_t allocationIndex = 0; allocationIndex < allocationCount; ++allocationIndex)
+        {
+            std::uint64_t address = 0;
+            std::uint64_t size = 0;
+
+            if ((!ReadUInt64(data, offset, address)) ||
+                (!ReadUInt64(data, offset, size)))
+            {
+                return;
+            }
+
+            snapshot.mAllocations.push_back(
+                {poolName, static_cast<std::uintptr_t>(address), static_cast<std::size_t>(size)});
+        }
+    }
+
+    if ((data.size() - offset != sizeof(SnapshotFooter)) ||
+        (std::memcmp(data.data() + offset, SnapshotFooter, sizeof(SnapshotFooter)) != 0))
+    {
+        return;
     }
 
     StreamedAllocationSummary summary = BuildAllocationSummary(snapshot);
@@ -950,7 +1170,7 @@ void MainWindow::AddAllocationToBin(std::vector<StreamedAllocationBin>& bins,
             }
         }
 
-        bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, 0});
+        bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, 0, false});
     }
 
     const auto binIterator = std::find_if(
@@ -1136,7 +1356,7 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
         0,
         tr("Allocation count"),
         QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mAllocationCount)));
-    SetTableRow(mOverviewTable, 1, tr("Allocation bytes"), QString::fromStdString(BuildByteCountText(summary.mAllocationBytes)));
+    SetTableRow(mOverviewTable, 1, tr("Allocation size"), QString::fromStdString(BuildByteCountText(summary.mAllocationBytes)));
     SetTableRow(mOverviewTable, 2, tr("Start address"), QString::fromStdString(BuildAddressText(rangeStart, summary.mAddressRange.mHasAllocations)), true);
     SetTableRow(mOverviewTable, 3, tr("End address"), QString::fromStdString(BuildAddressText(rangeEnd, summary.mAddressRange.mHasAllocations)), true);
     SetTableRow(mOverviewTable, 4, tr("Address Range"), QString::fromStdString(BuildHexValueText(addressRange, summary.mAddressRange.mHasAllocations)), true);
@@ -1157,12 +1377,19 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 //------------------------------------------------------------------------------
 void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
 {
-    mBinsGraphWidget->SetBins(summary.mBins);
-    mBinsTable->setRowCount(static_cast<int>(summary.mBins.size()));
-
-    for (int row = 0; row < static_cast<int>(summary.mBins.size()); ++row)
+    mCurrentBins = summary.mBins;
+    for (StreamedAllocationBin& bin : mCurrentBins)
     {
-        const StreamedAllocationBin& bin = summary.mBins[static_cast<std::size_t>(row)];
+        const auto binKey = std::make_pair(bin.mMinimumSize, bin.mMaximumSize);
+        bin.mSuppressed = mSuppressedBins.contains(binKey);
+    }
+
+    mBinsGraphWidget->SetBins(mCurrentBins);
+    mBinsTable->setRowCount(static_cast<int>(mCurrentBins.size()));
+
+    for (int row = 0; row < static_cast<int>(mCurrentBins.size()); ++row)
+    {
+        const StreamedAllocationBin& bin = mCurrentBins[static_cast<std::size_t>(row)];
         const std::size_t averageBytes = bin.mAllocationCount == 0
                                              ? 0
                                              : bin.mAllocationBytes / bin.mAllocationCount;
@@ -1197,6 +1424,36 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
     }
 
     mBinsTable->resizeRowsToContents();
+}
+
+
+//------------------------------------------------------------------------------
+// UpdateSuppressedBinState
+//------------------------------------------------------------------------------
+//  Update whether a bin should be hidden from the chart scaling and rendering.
+//------------------------------------------------------------------------------
+void MainWindow::UpdateSuppressedBinState(std::size_t minimumSize, std::size_t maximumSize, bool suppressed)
+{
+    const auto binKey = std::make_pair(minimumSize, maximumSize);
+    if (suppressed)
+    {
+        mSuppressedBins.insert(binKey);
+    }
+    else
+    {
+        mSuppressedBins.erase(binKey);
+    }
+
+    for (StreamedAllocationBin& bin : mCurrentBins)
+    {
+        if ((bin.mMinimumSize == minimumSize) && (bin.mMaximumSize == maximumSize))
+        {
+            bin.mSuppressed = suppressed;
+            break;
+        }
+    }
+
+    mBinsGraphWidget->SetBins(mCurrentBins);
 }
 
 

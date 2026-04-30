@@ -5,14 +5,19 @@
 
 #include <cstdint>
 #include <atomic>
+#include <functional>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 class QAction;
+class QCheckBox;
 class QLabel;
 class QPaintEvent;
+class QResizeEvent;
 class QTableWidget;
 class QTabWidget;
 
@@ -24,6 +29,7 @@ struct StreamedAllocationBin
     std::size_t mAllocationBytes = 0;
     std::size_t mMinimumAllocationSize = 0;
     std::size_t mMaximumAllocationSize = 0;
+    bool mSuppressed = false;
 };
 
 class BinGraphWidget : public QWidget
@@ -32,12 +38,20 @@ public:
     explicit BinGraphWidget(QWidget* parent = nullptr);
 
     void SetBins(const std::vector<StreamedAllocationBin>& bins);
+    void SetSuppressionChangedHandler(
+        std::function<void(std::size_t minimumSize, std::size_t maximumSize, bool suppressed)> handler);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
+    void UpdateBinControls();
+
     std::vector<StreamedAllocationBin> mBins;
+    std::vector<QCheckBox*> mBinCheckBoxes;
+    std::function<void(std::size_t minimumSize, std::size_t maximumSize, bool suppressed)> mSuppressionChangedHandler;
+    bool mUpdatingCheckBoxes = false;
 };
 
 class MainWindow : public QMainWindow
@@ -104,6 +118,7 @@ private:
     void UpdateStreamingSummary(const StreamedAllocationSummary& summary);
     void UpdateOverviewView(const StreamedAllocationSummary& summary);
     void UpdateBinsView(const StreamedAllocationSummary& summary);
+    void UpdateSuppressedBinState(std::size_t minimumSize, std::size_t maximumSize, bool suppressed);
     void ShowAboutDialog();
 
     QAction* mExitAction = nullptr;
@@ -119,4 +134,6 @@ private:
     std::thread mStreamingThread;
     std::mutex mStreamedSnapshotsMutex;
     std::vector<StreamedHeapSnapshot> mStreamedSnapshots;
+    std::vector<StreamedAllocationBin> mCurrentBins;
+    std::set<std::pair<std::size_t, std::size_t>> mSuppressedBins;
 };

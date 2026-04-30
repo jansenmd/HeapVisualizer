@@ -9,9 +9,7 @@
 #include <unistd.h>
 
 #include <atomic>
-#include <cstdarg>
 #include <cstddef>
-#include <cstdio>
 #include <cstdlib>
 #include <cstdint>
 #include <limits>
@@ -46,6 +44,11 @@ struct AllocationPool
 
 constexpr std::size_t MainAllocationCapacity = 262144;
 constexpr std::size_t InternalAllocationCapacity = 4096;
+constexpr char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
+constexpr char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
+constexpr std::uint32_t PoolIdentifierMain = 0;
+constexpr std::uint32_t PoolIdentifierInternal = 1;
+constexpr long StreamingIntervalNanoseconds = 100000000;
 void* const TombstoneAddress = reinterpret_cast<void*>(static_cast<std::uintptr_t>(1));
 
 AllocationRecord gMainAllocationRecords[MainAllocationCapacity] = {};
@@ -161,27 +164,40 @@ bool SendAll(int socketFileDescriptor, const char* data, std::size_t size)
 
 
 //------------------------------------------------------------------------------
-// SendFormatted
+// SendUInt32
 //------------------------------------------------------------------------------
-//  Format a small streaming line on the stack and send it to a socket.
+//  Send a 32-bit unsigned integer in little-endian byte order.
 //------------------------------------------------------------------------------
-bool SendFormatted(int socketFileDescriptor, const char* format, ...)
+bool SendUInt32(int socketFileDescriptor, std::uint32_t value)
 {
-    char buffer[256] = {};
-    va_list arguments;
-    va_start(arguments, format);
-    const int written = std::vsnprintf(buffer, sizeof(buffer), format, arguments);
-    va_end(arguments);
+    const char bytes[4] = {
+        static_cast<char>(value & 0xffU),
+        static_cast<char>((value >> 8U) & 0xffU),
+        static_cast<char>((value >> 16U) & 0xffU),
+        static_cast<char>((value >> 24U) & 0xffU)};
 
-    if (written <= 0)
-    {
-        return false;
-    }
+    return SendAll(socketFileDescriptor, bytes, sizeof(bytes));
+}
 
-    const std::size_t writeLength = static_cast<std::size_t>(written) < sizeof(buffer)
-                                        ? static_cast<std::size_t>(written)
-                                        : sizeof(buffer) - 1;
-    return SendAll(socketFileDescriptor, buffer, writeLength);
+
+//------------------------------------------------------------------------------
+// SendUInt64
+//------------------------------------------------------------------------------
+//  Send a 64-bit unsigned integer in little-endian byte order.
+//------------------------------------------------------------------------------
+bool SendUInt64(int socketFileDescriptor, std::uint64_t value)
+{
+    const char bytes[8] = {
+        static_cast<char>(value & 0xffULL),
+        static_cast<char>((value >> 8U) & 0xffULL),
+        static_cast<char>((value >> 16U) & 0xffULL),
+        static_cast<char>((value >> 24U) & 0xffULL),
+        static_cast<char>((value >> 32U) & 0xffULL),
+        static_cast<char>((value >> 40U) & 0xffULL),
+        static_cast<char>((value >> 48U) & 0xffULL),
+        static_cast<char>((value >> 56U) & 0xffULL)};
+
+    return SendAll(socketFileDescriptor, bytes, sizeof(bytes));
 }
 
 
@@ -190,32 +206,26 @@ bool SendFormatted(int socketFileDescriptor, const char* format, ...)
 //------------------------------------------------------------------------------
 //  Serialize one allocation tracking pool to a socket.
 //------------------------------------------------------------------------------
-bool SendAllocationPool(int socketFileDescriptor, const char* poolName, AllocationPool& pool)
+bool SendAllocationPool(int socketFileDescriptor, std::uint32_t poolIdentifier, AllocationPool& pool)
 {
     LockPool(pool);
 
-    bool sent = SendFormatted(
-        socketFileDescriptor,
-        "POOL %s %zu %zu %llu %llu %llu %llu\n",
-        poolName,
-        pool.mAllocationCount,
-        pool.mAllocationBytes,
-        pool.mTrackedAllocations,
-        pool.mTrackedDeallocations,
-        pool.mUntrackedAllocations,
-        pool.mUntrackedDeallocations);
+    bool sent = SendUInt32(socketFileDescriptor, poolIdentifier) &&
+                SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mAllocationCount)) &&
+                SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mAllocationBytes)) &&
+                SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mTrackedAllocations)) &&
+                SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mTrackedDeallocations)) &&
+                SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mUntrackedAllocations)) &&
+                SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mUntrackedDeallocations));
 
     for (std::size_t index = 0; sent && (index < pool.mCapacity); ++index)
     {
         const AllocationRecord& record = pool.mRecords[index];
         if (IsTrackedAddress(record))
         {
-            sent = SendFormatted(
-                socketFileDescriptor,
-                "ALLOC %s %zx %zu\n",
-                poolName,
-                reinterpret_cast<std::uintptr_t>(record.mAddress),
-                record.mSize);
+            const auto address = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(record.mAddress));
+            sent = SendUInt64(socketFileDescriptor, address) &&
+                   SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(record.mSize));
         }
     }
 
@@ -231,22 +241,32 @@ bool SendAllocationPool(int socketFileDescriptor, const char* poolName, Allocati
 //------------------------------------------------------------------------------
 void SendSerializedAllocations(int socketFileDescriptor)
 {
-    if (!SendAll(socketFileDescriptor, "HEAPVIZ_ALLOCATIONS 1\n", 22))
+    // Send the header.
+    if (!SendAll(socketFileDescriptor, SnapshotMagic, sizeof(SnapshotMagic)))
     {
         return;
     }
 
-    if (!SendAllocationPool(socketFileDescriptor, "main", gMainAllocationPool))
+    // Send the number of pools.
+    if (!SendUInt32(socketFileDescriptor, 2))
     {
         return;
     }
 
-    if (!SendAllocationPool(socketFileDescriptor, "internal", gInternalAllocationPool))
+    // Send the main pool.
+    if (!SendAllocationPool(socketFileDescriptor, PoolIdentifierMain, gMainAllocationPool))
     {
         return;
     }
 
-    SendAll(socketFileDescriptor, "END\n", 4);
+    // Send the internal pool.
+    if (!SendAllocationPool(socketFileDescriptor, PoolIdentifierInternal, gInternalAllocationPool))
+    {
+        return;
+    }
+
+    // Send the footer.
+    SendAll(socketFileDescriptor, SnapshotFooter, sizeof(SnapshotFooter));
 }
 
 
@@ -286,15 +306,22 @@ void ConnectAndSendSerializedAllocations()
 
 
 //------------------------------------------------------------------------------
-// OneSecondFromNow
+// StreamingIntervalFromNow
 //------------------------------------------------------------------------------
-//  Return an absolute realtime clock value one second from now.
+//  Return an absolute realtime clock value for the next streaming interval.
 //------------------------------------------------------------------------------
-timespec OneSecondFromNow()
+timespec StreamingIntervalFromNow()
 {
     timespec timeout = {};
     clock_gettime(CLOCK_REALTIME, &timeout);
-    ++timeout.tv_sec;
+
+    timeout.tv_nsec += StreamingIntervalNanoseconds;
+    if (timeout.tv_nsec >= 1000000000)
+    {
+        timeout.tv_nsec -= 1000000000;
+        ++timeout.tv_sec;
+    }
+
     return timeout;
 }
 
@@ -302,11 +329,11 @@ timespec OneSecondFromNow()
 //------------------------------------------------------------------------------
 // WaitForStreamingStopSignal
 //------------------------------------------------------------------------------
-//  Wait up to one second for the streaming thread to be asked to stop.
+//  Wait up to one streaming interval for the streaming thread to stop.
 //------------------------------------------------------------------------------
 bool WaitForStreamingStopSignal()
 {
-    const timespec timeout = OneSecondFromNow();
+    const timespec timeout = StreamingIntervalFromNow();
     pthread_mutex_lock(&gStreamingWaitMutex);
 
     while (gStreamingThreadRunning.load(std::memory_order_acquire))
