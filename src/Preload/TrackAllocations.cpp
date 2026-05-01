@@ -8,6 +8,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
@@ -27,6 +28,8 @@ struct AllocationRecord
 {
     void* mAddress = nullptr;
     std::size_t mSize = 0;
+    HeapVisualizer::AllocationHooks::AllocationOperationType mType =
+        HeapVisualizer::AllocationHooks::AllocationOperationType::Malloc;
 };
 
 struct AllocationPool
@@ -40,6 +43,12 @@ struct AllocationPool
     unsigned long long mTrackedDeallocations = 0;
     unsigned long long mUntrackedAllocations = 0;
     unsigned long long mUntrackedDeallocations = 0;
+    std::array<unsigned long long,
+               static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+        mTrackedAllocationsByType = {};
+    std::array<unsigned long long,
+               static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+        mTrackedDeallocationsByType = {};
 };
 
 constexpr std::size_t MainAllocationCapacity = 0x40000;
@@ -62,7 +71,9 @@ AllocationPool gMainAllocationPool = {
     0,
     0,
     0,
-    0};
+    0,
+    {},
+    {}};
 AllocationPool gInternalAllocationPool = {
     ATOMIC_FLAG_INIT,
     gInternalAllocationRecords,
@@ -72,7 +83,9 @@ AllocationPool gInternalAllocationPool = {
     0,
     0,
     0,
-    0};
+    0,
+    {},
+    {}};
 
 }
 
@@ -86,6 +99,28 @@ namespace
 
 void LockPool(AllocationPool& pool);
 void UnlockPool(AllocationPool& pool);
+
+
+//------------------------------------------------------------------------------
+// OperationTypeIndex
+//------------------------------------------------------------------------------
+//  Convert an allocation operation type into a count-array index.
+//------------------------------------------------------------------------------
+std::size_t OperationTypeIndex(AllocationOperationType type)
+{
+    return static_cast<std::size_t>(type);
+}
+
+
+//------------------------------------------------------------------------------
+// IsValidOperationType
+//------------------------------------------------------------------------------
+//  Return whether an allocation operation type is inside the known range.
+//------------------------------------------------------------------------------
+bool IsValidOperationType(AllocationOperationType type)
+{
+    return OperationTypeIndex(type) < OperationTypeIndex(AllocationOperationType::Count);
+}
 
 
 //------------------------------------------------------------------------------
@@ -218,6 +253,20 @@ bool SendAllocationPool(int socketFileDescriptor, std::uint32_t poolIdentifier, 
                 SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mUntrackedAllocations)) &&
                 SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mUntrackedDeallocations));
 
+    for (std::size_t typeIndex = 0;
+         sent && (typeIndex < OperationTypeIndex(AllocationOperationType::Count));
+         ++typeIndex)
+    {
+        sent = SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mTrackedAllocationsByType[typeIndex]));
+    }
+
+    for (std::size_t typeIndex = 0;
+         sent && (typeIndex < OperationTypeIndex(AllocationOperationType::Count));
+         ++typeIndex)
+    {
+        sent = SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(pool.mTrackedDeallocationsByType[typeIndex]));
+    }
+
     for (std::size_t index = 0; sent && (index < pool.mCapacity); ++index)
     {
         const AllocationRecord& record = pool.mRecords[index];
@@ -225,7 +274,8 @@ bool SendAllocationPool(int socketFileDescriptor, std::uint32_t poolIdentifier, 
         {
             const auto address = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(record.mAddress));
             sent = SendUInt64(socketFileDescriptor, address) &&
-                   SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(record.mSize));
+                   SendUInt64(socketFileDescriptor, static_cast<std::uint64_t>(record.mSize)) &&
+                   SendUInt32(socketFileDescriptor, static_cast<std::uint32_t>(record.mType));
         }
     }
 
@@ -527,9 +577,9 @@ void CleanupTrailingTombstones(AllocationPool& pool, std::size_t deletedRecordIn
 //------------------------------------------------------------------------------
 //  Track a single allocation in a fixed-size tracking pool.
 //------------------------------------------------------------------------------
-void TrackAllocationInPool(AllocationPool& pool, void* pointer, std::size_t size)
+void TrackAllocationInPool(AllocationPool& pool, void* pointer, std::size_t size, AllocationOperationType type)
 {
-    if ((pointer == nullptr) || (pool.mRecords == nullptr) || (pool.mCapacity == 0))
+    if ((pointer == nullptr) || (pool.mRecords == nullptr) || (pool.mCapacity == 0) || (!IsValidOperationType(type)))
     {
         return;
     }
@@ -546,8 +596,10 @@ void TrackAllocationInPool(AllocationPool& pool, void* pointer, std::size_t size
         {
             record.mAddress = pointer;
             record.mSize = size;
+            record.mType = type;
             ++pool.mAllocationCount;
             ++pool.mTrackedAllocations;
+            ++pool.mTrackedAllocationsByType[OperationTypeIndex(type)];
             pool.mAllocationBytes += size;
             UnlockPool(pool);
             return;
@@ -564,9 +616,9 @@ void TrackAllocationInPool(AllocationPool& pool, void* pointer, std::size_t size
 //------------------------------------------------------------------------------
 //  Remove a single allocation from a fixed-size tracking pool.
 //------------------------------------------------------------------------------
-bool UntrackAllocationInPool(AllocationPool& pool, void* pointer)
+bool UntrackAllocationInPool(AllocationPool& pool, void* pointer, AllocationOperationType type)
 {
-    if ((pointer == nullptr) || (pool.mRecords == nullptr) || (pool.mCapacity == 0))
+    if ((pointer == nullptr) || (pool.mRecords == nullptr) || (pool.mCapacity == 0) || (!IsValidOperationType(type)))
     {
         return false;
     }
@@ -584,8 +636,10 @@ bool UntrackAllocationInPool(AllocationPool& pool, void* pointer)
             pool.mAllocationBytes -= record.mSize;
             --pool.mAllocationCount;
             ++pool.mTrackedDeallocations;
+            ++pool.mTrackedDeallocationsByType[OperationTypeIndex(type)];
             record.mAddress = TombstoneAddress;
             record.mSize = 0;
+            record.mType = AllocationOperationType::Malloc;
             CleanupTrailingTombstones(pool, recordIndex);
             UnlockPool(pool);
             return true;
@@ -623,9 +677,9 @@ void RecordUnknownDeallocation(AllocationPool& pool)
 //------------------------------------------------------------------------------
 //  Track an allocation owned by the target application.
 //------------------------------------------------------------------------------
-void TrackAllocationTarget(void* pointer, std::size_t size)
+void TrackAllocationTarget(void* pointer, std::size_t size, AllocationOperationType type)
 {
-    TrackAllocationInPool(gMainAllocationPool, pointer, size);
+    TrackAllocationInPool(gMainAllocationPool, pointer, size, type);
 }
 
 
@@ -634,9 +688,9 @@ void TrackAllocationTarget(void* pointer, std::size_t size)
 //------------------------------------------------------------------------------
 //  Track an allocation owned by the preload hook library internals.
 //------------------------------------------------------------------------------
-void TrackAllocationInternal(void* pointer, std::size_t size)
+void TrackAllocationInternal(void* pointer, std::size_t size, AllocationOperationType type)
 {
-    TrackAllocationInPool(gInternalAllocationPool, pointer, size);
+    TrackAllocationInPool(gInternalAllocationPool, pointer, size, type);
 }
 
 
@@ -645,19 +699,19 @@ void TrackAllocationInternal(void* pointer, std::size_t size)
 //------------------------------------------------------------------------------
 //  Remove an allocation from whichever pool owns it.
 //------------------------------------------------------------------------------
-void UntrackAllocation(void* pointer)
+void UntrackAllocation(void* pointer, AllocationOperationType type)
 {
     if (pointer == nullptr)
     {
         return;
     }
 
-    if (UntrackAllocationInPool(gMainAllocationPool, pointer))
+    if (UntrackAllocationInPool(gMainAllocationPool, pointer, type))
     {
         return;
     }
 
-    if (UntrackAllocationInPool(gInternalAllocationPool, pointer))
+    if (UntrackAllocationInPool(gInternalAllocationPool, pointer, type))
     {
         return;
     }

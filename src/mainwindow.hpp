@@ -3,6 +3,9 @@
 #include <QMainWindow>
 #include <QWidget>
 
+#include "Preload/TrackAllocations.hpp"
+
+#include <array>
 #include <cstdint>
 #include <atomic>
 #include <functional>
@@ -67,6 +70,8 @@ private:
         std::string mPool;
         std::uintptr_t mAddress = 0;
         std::size_t mSize = 0;
+        HeapVisualizer::AllocationHooks::AllocationOperationType mType =
+            HeapVisualizer::AllocationHooks::AllocationOperationType::Malloc;
     };
 
     struct StreamedHeapSnapshot
@@ -78,6 +83,12 @@ private:
         unsigned long long mTrackedDeallocations = 0;
         unsigned long long mUntrackedAllocations = 0;
         unsigned long long mUntrackedDeallocations = 0;
+        std::array<unsigned long long,
+                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+            mTrackedAllocationsByType = {};
+        std::array<unsigned long long,
+                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+            mTrackedDeallocationsByType = {};
     };
 
     struct StreamedAddressRange
@@ -98,6 +109,12 @@ private:
         unsigned long long mTrackedDeallocations = 0;
         unsigned long long mUntrackedAllocations = 0;
         unsigned long long mUntrackedDeallocations = 0;
+        std::array<unsigned long long,
+                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+            mTrackedAllocationsByType = {};
+        std::array<unsigned long long,
+                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+            mTrackedDeallocationsByType = {};
         std::vector<StreamedAllocationBin> mBins;
     };
 

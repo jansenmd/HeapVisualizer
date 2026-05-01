@@ -187,13 +187,13 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* malloc(std::size_t size)
     if (HookScope::IsInsideHook())
     {
         pointer = CallLibcMalloc(size);
-        TrackAllocationInternal(pointer, size);
+        TrackAllocationInternal(pointer, size, AllocationOperationType::Malloc);
     }
     else
     {
         HookScope scope;
         pointer = CallLibcMalloc(size);
-        TrackAllocationTarget(pointer, size);
+        TrackAllocationTarget(pointer, size, AllocationOperationType::Malloc);
     }
     return pointer;
 }
@@ -213,7 +213,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* calloc(std::size_t count, std::size_t size)
         pointer = CallLibcCalloc(count, size);
         if (pointer != NULL)
         {
-            TrackAllocationInternal(pointer, count * size);
+            TrackAllocationInternal(pointer, count * size, AllocationOperationType::Calloc);
         }
     }
     else
@@ -222,7 +222,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* calloc(std::size_t count, std::size_t size)
         pointer = CallLibcCalloc(count, size);
         if (pointer != NULL)
         {
-            TrackAllocationTarget(pointer, count * size);
+            TrackAllocationTarget(pointer, count * size, AllocationOperationType::Calloc);
         }
     }
     return pointer;
@@ -242,8 +242,8 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* realloc(void* pointer, std::size_t size)
         newPointer = CallLibcRealloc(pointer, size);
         if ((newPointer != nullptr) || (size == 0))
         {
-            UntrackAllocation(pointer);
-            TrackAllocationInternal(newPointer, size);
+            UntrackAllocation(pointer, AllocationOperationType::Realloc);
+            TrackAllocationInternal(newPointer, size, AllocationOperationType::Realloc);
         }
     }
     else
@@ -252,8 +252,8 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* realloc(void* pointer, std::size_t size)
         newPointer = CallLibcRealloc(pointer, size);
         if ((newPointer != nullptr) || (size == 0))
         {
-            UntrackAllocation(pointer);
-            TrackAllocationTarget(newPointer, size);
+            UntrackAllocation(pointer, AllocationOperationType::Realloc);
+            TrackAllocationTarget(newPointer, size, AllocationOperationType::Realloc);
         }
     }
     return newPointer;
@@ -280,8 +280,8 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* reallocarray(void* pointer, std::size_t coun
         newPointer = CallLibcRealloc(pointer, allocationSize);
         if ((newPointer != nullptr) || (allocationSize == 0))
         {
-            UntrackAllocation(pointer);
-            TrackAllocationInternal(newPointer, allocationSize);
+            UntrackAllocation(pointer, AllocationOperationType::ReallocArray);
+            TrackAllocationInternal(newPointer, allocationSize, AllocationOperationType::ReallocArray);
         }
     }
     else
@@ -290,8 +290,8 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* reallocarray(void* pointer, std::size_t coun
         newPointer = CallLibcRealloc(pointer, allocationSize);
         if ((newPointer != nullptr) || (allocationSize == 0))
         {
-            UntrackAllocation(pointer);
-            TrackAllocationTarget(newPointer, allocationSize);
+            UntrackAllocation(pointer, AllocationOperationType::ReallocArray);
+            TrackAllocationTarget(newPointer, allocationSize, AllocationOperationType::ReallocArray);
         }
     }
     return newPointer;
@@ -307,13 +307,13 @@ HEAPVISUALIZER_PRELOAD_EXPORT void free(void* pointer)
 {
     if (HookScope::IsInsideHook())
     {
-        UntrackAllocation(pointer);
+        UntrackAllocation(pointer, AllocationOperationType::Free);
         CallLibcFree(pointer);
     }
     else
     {
         HookScope scope;
-        UntrackAllocation(pointer);
+        UntrackAllocation(pointer, AllocationOperationType::Free);
         CallLibcFree(pointer);
     }
 }
@@ -326,7 +326,17 @@ HEAPVISUALIZER_PRELOAD_EXPORT void free(void* pointer)
 //------------------------------------------------------------------------------
 HEAPVISUALIZER_PRELOAD_EXPORT void cfree(void* pointer)
 {
-    free(pointer);
+    if (HookScope::IsInsideHook())
+    {
+        UntrackAllocation(pointer, AllocationOperationType::CFree);
+        CallLibcFree(pointer);
+    }
+    else
+    {
+        HookScope scope;
+        UntrackAllocation(pointer, AllocationOperationType::CFree);
+        CallLibcFree(pointer);
+    }
 }
 
 
@@ -355,7 +365,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT int posix_memalign(void** memoryPointer, std::size
         }
         else
         {
-            TrackAllocationInternal(pointer, size);
+            TrackAllocationInternal(pointer, size, AllocationOperationType::PosixMemalign);
             *memoryPointer = pointer;
         }
     }
@@ -369,7 +379,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT int posix_memalign(void** memoryPointer, std::size
         }
         else
         {
-            TrackAllocationTarget(pointer, size);
+            TrackAllocationTarget(pointer, size, AllocationOperationType::PosixMemalign);
             *memoryPointer = pointer;
         }
     }
@@ -388,13 +398,13 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* aligned_alloc(std::size_t alignment, std::si
     if (HookScope::IsInsideHook())
     {
         pointer = CallLibcMemalign(alignment, size);
-        TrackAllocationInternal(pointer, size);
+        TrackAllocationInternal(pointer, size, AllocationOperationType::AlignedAlloc);
     }
     else
     {
         HookScope scope;
         pointer = CallLibcMemalign(alignment, size);
-        TrackAllocationTarget(pointer, size);
+        TrackAllocationTarget(pointer, size, AllocationOperationType::AlignedAlloc);
     }
     return pointer;
 }
@@ -411,13 +421,13 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* memalign(std::size_t alignment, std::size_t 
     if (HookScope::IsInsideHook())
     {
         pointer = CallLibcMemalign(alignment, size);
-        TrackAllocationInternal(pointer, size);
+        TrackAllocationInternal(pointer, size, AllocationOperationType::Memalign);
     }
     else
     {
         HookScope scope;
         pointer = CallLibcMemalign(alignment, size);
-        TrackAllocationTarget(pointer, size);
+        TrackAllocationTarget(pointer, size, AllocationOperationType::Memalign);
     }
     return pointer;
 }
@@ -434,13 +444,13 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* valloc(std::size_t size)
     if (HookScope::IsInsideHook())
     {
         pointer = CallLibcMemalign(PageSize(), size);
-        TrackAllocationInternal(pointer, size);
+        TrackAllocationInternal(pointer, size, AllocationOperationType::Valloc);
     }
     else
     {
         HookScope scope;
         pointer = CallLibcMemalign(PageSize(), size);
-        TrackAllocationTarget(pointer, size);
+        TrackAllocationTarget(pointer, size, AllocationOperationType::Valloc);
     }
     return pointer;
 }
@@ -464,13 +474,13 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* pvalloc(std::size_t size)
     if (HookScope::IsInsideHook())
     {
         pointer = CallLibcMemalign(pageSize, allocationSize);
-        TrackAllocationInternal(pointer, allocationSize);
+        TrackAllocationInternal(pointer, allocationSize, AllocationOperationType::PValloc);
     }
     else
     {
         HookScope scope;
         pointer = CallLibcMemalign(pageSize, allocationSize);
-        TrackAllocationTarget(pointer, allocationSize);
+        TrackAllocationTarget(pointer, allocationSize, AllocationOperationType::PValloc);
     }
     return pointer;
 }

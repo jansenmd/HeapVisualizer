@@ -72,6 +72,71 @@ constexpr char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
 constexpr char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
 constexpr std::uint32_t PoolIdentifierMain = 0;
 constexpr std::uint32_t PoolIdentifierInternal = 1;
+constexpr std::size_t AllocationOperationTypeCount =
+    static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count);
+
+
+//------------------------------------------------------------------------------
+// OperationTypeIndex
+//------------------------------------------------------------------------------
+//  Convert an allocation operation type into a count-array index.
+//------------------------------------------------------------------------------
+std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationOperationType type)
+{
+    return static_cast<std::size_t>(type);
+}
+
+
+//------------------------------------------------------------------------------
+// IsValidOperationType
+//------------------------------------------------------------------------------
+//  Return whether an allocation operation type is inside the known range.
+//------------------------------------------------------------------------------
+bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationOperationType type)
+{
+    return OperationTypeIndex(type) < AllocationOperationTypeCount;
+}
+
+
+//------------------------------------------------------------------------------
+// AllocationOperationName
+//------------------------------------------------------------------------------
+//  Return the display name for an allocation operation type.
+//------------------------------------------------------------------------------
+QString AllocationOperationName(HeapVisualizer::AllocationHooks::AllocationOperationType type)
+{
+    using HeapVisualizer::AllocationHooks::AllocationOperationType;
+
+    switch (type)
+    {
+    case AllocationOperationType::Malloc:
+        return QStringLiteral("malloc");
+    case AllocationOperationType::Calloc:
+        return QStringLiteral("calloc");
+    case AllocationOperationType::Realloc:
+        return QStringLiteral("realloc");
+    case AllocationOperationType::ReallocArray:
+        return QStringLiteral("reallocarray");
+    case AllocationOperationType::Free:
+        return QStringLiteral("free");
+    case AllocationOperationType::CFree:
+        return QStringLiteral("cfree");
+    case AllocationOperationType::PosixMemalign:
+        return QStringLiteral("posix_memalign");
+    case AllocationOperationType::AlignedAlloc:
+        return QStringLiteral("aligned_alloc");
+    case AllocationOperationType::Memalign:
+        return QStringLiteral("memalign");
+    case AllocationOperationType::Valloc:
+        return QStringLiteral("valloc");
+    case AllocationOperationType::PValloc:
+        return QStringLiteral("pvalloc");
+    case AllocationOperationType::Count:
+        break;
+    }
+
+    return QStringLiteral("unknown");
+}
 
 
 //------------------------------------------------------------------------------
@@ -624,7 +689,8 @@ void SetTableRow(QTableWidget* tableWidget,
                  int row,
                  const QString& name,
                  const QString& value,
-                 bool useMonospaceValue = false)
+                 bool useMonospaceValue = false,
+                 bool useMutedText = false)
 {
     QTableWidgetItem* nameItem = new QTableWidgetItem(name);
     QTableWidgetItem* valueItem = new QTableWidgetItem(value);
@@ -634,6 +700,13 @@ void SetTableRow(QTableWidget* tableWidget,
     if (useMonospaceValue)
     {
         valueItem->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    }
+
+    if (useMutedText)
+    {
+        const QBrush mutedTextBrush(QColor(QStringLiteral("#9aa6b2")));
+        nameItem->setForeground(mutedTextBrush);
+        valueItem->setForeground(mutedTextBrush);
     }
 
     tableWidget->setItem(row, 0, nameItem);
@@ -1284,19 +1357,49 @@ void MainWindow::ParseStreamingData(const std::string& data)
         snapshot.mUntrackedAllocations += static_cast<unsigned long long>(untrackedAllocations);
         snapshot.mUntrackedDeallocations += static_cast<unsigned long long>(untrackedDeallocations);
 
+        for (std::size_t typeIndex = 0; typeIndex < AllocationOperationTypeCount; ++typeIndex)
+        {
+            std::uint64_t typeCount = 0;
+            if (!ReadUInt64(data, offset, typeCount))
+            {
+                return;
+            }
+
+            snapshot.mTrackedAllocationsByType[typeIndex] += static_cast<unsigned long long>(typeCount);
+        }
+
+        for (std::size_t typeIndex = 0; typeIndex < AllocationOperationTypeCount; ++typeIndex)
+        {
+            std::uint64_t typeCount = 0;
+            if (!ReadUInt64(data, offset, typeCount))
+            {
+                return;
+            }
+
+            snapshot.mTrackedDeallocationsByType[typeIndex] += static_cast<unsigned long long>(typeCount);
+        }
+
         for (std::uint64_t allocationIndex = 0; allocationIndex < allocationCount; ++allocationIndex)
         {
             std::uint64_t address = 0;
             std::uint64_t size = 0;
+            std::uint32_t typeValue = 0;
 
             if ((!ReadUInt64(data, offset, address)) ||
-                (!ReadUInt64(data, offset, size)))
+                (!ReadUInt64(data, offset, size)) ||
+                (!ReadUInt32(data, offset, typeValue)))
+            {
+                return;
+            }
+
+            const auto type = static_cast<HeapVisualizer::AllocationHooks::AllocationOperationType>(typeValue);
+            if (!IsValidOperationType(type))
             {
                 return;
             }
 
             snapshot.mAllocations.push_back(
-                {poolName, static_cast<std::uintptr_t>(address), static_cast<std::size_t>(size)});
+                {poolName, static_cast<std::uintptr_t>(address), static_cast<std::size_t>(size), type});
         }
     }
 
@@ -1434,6 +1537,8 @@ MainWindow::StreamedAllocationSummary MainWindow::BuildAllocationSummary(const S
     summary.mTrackedDeallocations = snapshot.mTrackedDeallocations;
     summary.mUntrackedAllocations = snapshot.mUntrackedAllocations;
     summary.mUntrackedDeallocations = snapshot.mUntrackedDeallocations;
+    summary.mTrackedAllocationsByType = snapshot.mTrackedAllocationsByType;
+    summary.mTrackedDeallocationsByType = snapshot.mTrackedDeallocationsByType;
 
     for (const StreamedAllocation& allocation : snapshot.mAllocations)
     {
@@ -1571,7 +1676,27 @@ void MainWindow::UpdateStreamingSummary(const StreamedAllocationSummary& summary
 //------------------------------------------------------------------------------
 void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 {
-    constexpr int rowCount = 10;
+    using HeapVisualizer::AllocationHooks::AllocationOperationType;
+
+    constexpr std::array allocationDisplayTypes = {
+        AllocationOperationType::Malloc,
+        AllocationOperationType::Calloc,
+        AllocationOperationType::Realloc,
+        AllocationOperationType::ReallocArray,
+        AllocationOperationType::PosixMemalign,
+        AllocationOperationType::AlignedAlloc,
+        AllocationOperationType::Memalign,
+        AllocationOperationType::Valloc,
+        AllocationOperationType::PValloc};
+    constexpr std::array deallocationDisplayTypes = {
+        AllocationOperationType::Realloc,
+        AllocationOperationType::ReallocArray,
+        AllocationOperationType::Free,
+        AllocationOperationType::CFree};
+    constexpr int baseRowCount = 10;
+    const int rowCount = baseRowCount +
+                         static_cast<int>(allocationDisplayTypes.size()) +
+                         static_cast<int>(deallocationDisplayTypes.size());
     mOverviewTable->setRowCount(rowCount);
 
     const std::uintptr_t rangeStart = summary.mAddressRange.mLowestAddress;
@@ -1583,20 +1708,47 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
                                          ? static_cast<std::size_t>(rangeEnd - rangeStart)
                                          : 0;
 
+    int row = 0;
     SetTableRow(
         mOverviewTable,
-        0,
-        tr("Allocation count"),
+        row++,
+        tr("Allocation Count"),
         QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mAllocationCount)));
-    SetTableRow(mOverviewTable, 1, tr("Allocation size"), QString::fromStdString(BuildByteCountText(summary.mAllocationBytes)));
-    SetTableRow(mOverviewTable, 2, tr("Start address"), QString::fromStdString(BuildAddressText(rangeStart, summary.mAddressRange.mHasAllocations, addressDigitCount)), true);
-    SetTableRow(mOverviewTable, 3, tr("End address"), QString::fromStdString(BuildAddressText(rangeEnd, summary.mAddressRange.mHasAllocations, addressDigitCount)), true);
-    SetTableRow(mOverviewTable, 4, tr("Address Range"), QString::fromStdString(BuildHexValueText(addressRange, summary.mAddressRange.mHasAllocations)), true);
-    SetTableRow(mOverviewTable, 5, tr("Tracked allocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedAllocations)));
-    SetTableRow(mOverviewTable, 6, tr("Tracked deallocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedDeallocations)));
-    SetTableRow(mOverviewTable, 7, tr("Untracked allocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mUntrackedAllocations)));
-    SetTableRow(mOverviewTable, 8, tr("Untracked deallocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mUntrackedDeallocations)));
-    SetTableRow(mOverviewTable, 9, tr("Last stream payload size"), QString::fromStdString(BuildByteCountText(summary.mStreamPayloadSize)));
+    SetTableRow(mOverviewTable, row++, tr("Allocation Size"), QString::fromStdString(BuildByteCountText(summary.mAllocationBytes)));
+    SetTableRow(mOverviewTable, row++, tr("Address Start"), QString::fromStdString(BuildAddressText(rangeStart, summary.mAddressRange.mHasAllocations, addressDigitCount)), true);
+    SetTableRow(mOverviewTable, row++, tr("Address End"), QString::fromStdString(BuildAddressText(rangeEnd, summary.mAddressRange.mHasAllocations, addressDigitCount)), true);
+    SetTableRow(mOverviewTable, row++, tr("Address Range"), QString::fromStdString(BuildHexValueText(addressRange, summary.mAddressRange.mHasAllocations)), true);
+    SetTableRow(mOverviewTable, row++, tr("Tracked Allocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedAllocations)));
+
+    for (AllocationOperationType type : allocationDisplayTypes)
+    {
+        const unsigned long long operationCount = summary.mTrackedAllocationsByType[OperationTypeIndex(type)];
+        SetTableRow(
+            mOverviewTable,
+            row++,
+            QStringLiteral("    ") + AllocationOperationName(type),
+            QString::fromStdString(BuildCommaSeparatedIntegerText(operationCount)),
+            false,
+            operationCount == 0);
+    }
+
+    SetTableRow(mOverviewTable, row++, tr("Tracked Deallocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedDeallocations)));
+
+    for (AllocationOperationType type : deallocationDisplayTypes)
+    {
+        const unsigned long long operationCount = summary.mTrackedDeallocationsByType[OperationTypeIndex(type)];
+        SetTableRow(
+            mOverviewTable,
+            row++,
+            QStringLiteral("    ") + AllocationOperationName(type),
+            QString::fromStdString(BuildCommaSeparatedIntegerText(operationCount)),
+            false,
+            operationCount == 0);
+    }
+
+    SetTableRow(mOverviewTable, row++, tr("Untracked Allocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mUntrackedAllocations)));
+    SetTableRow(mOverviewTable, row++, tr("Untracked Deallocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mUntrackedDeallocations)));
+    SetTableRow(mOverviewTable, row++, tr("Last stream payload size"), QString::fromStdString(BuildByteCountText(summary.mStreamPayloadSize)));
 
     mOverviewTable->resizeRowsToContents();
 }
