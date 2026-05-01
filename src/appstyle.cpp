@@ -106,6 +106,17 @@ void ApplyApplicationStyle(QApplication& application)
             outline: none;
         }
 
+        QTableWidget#OverviewTable::item:selected,
+        QTableWidget#OverviewTable::item:selected:active,
+        QTableWidget#OverviewTable::item:selected:!active,
+        QTableWidget#BinsTable::item:selected,
+        QTableWidget#BinsTable::item:selected:active,
+        QTableWidget#BinsTable::item:selected:!active
+        {
+            background: #dbeaff;
+            color: #172033;
+        }
+
         QHeaderView::section
         {
             background: #edf3fa;

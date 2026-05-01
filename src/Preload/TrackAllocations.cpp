@@ -239,43 +239,43 @@ bool SendAllocationPool(int socketFileDescriptor, std::uint32_t poolIdentifier, 
 //------------------------------------------------------------------------------
 //  Serialize tracked heap allocation state to a connected socket.
 //------------------------------------------------------------------------------
-void SendSerializedAllocations(int socketFileDescriptor)
+bool SendSerializedAllocations(int socketFileDescriptor)
 {
     // Send the header.
     if (!SendAll(socketFileDescriptor, SnapshotMagic, sizeof(SnapshotMagic)))
     {
-        return;
+        return false;
     }
 
     // Send the number of pools.
     if (!SendUInt32(socketFileDescriptor, 2))
     {
-        return;
+        return false;
     }
 
     // Send the main pool.
     if (!SendAllocationPool(socketFileDescriptor, PoolIdentifierMain, gMainAllocationPool))
     {
-        return;
+        return false;
     }
 
     // Send the internal pool.
     if (!SendAllocationPool(socketFileDescriptor, PoolIdentifierInternal, gInternalAllocationPool))
     {
-        return;
+        return false;
     }
 
     // Send the footer.
-    SendAll(socketFileDescriptor, SnapshotFooter, sizeof(SnapshotFooter));
+    return SendAll(socketFileDescriptor, SnapshotFooter, sizeof(SnapshotFooter));
 }
 
 
 //------------------------------------------------------------------------------
-// ConnectAndSendSerializedAllocations
+// ConnectToVisualizer
 //------------------------------------------------------------------------------
-//  Connect to the visualizer and send the current allocation snapshot.
+//  Connect to the visualizer and return the connected socket.
 //------------------------------------------------------------------------------
-void ConnectAndSendSerializedAllocations()
+int ConnectToVisualizer()
 {
     const char* host = ReadEnvironmentString("HEAP_VISUALIZER_STREAM_HOST", "127.0.0.1");
     const int port = ReadEnvironmentInt("HEAP_VISUALIZER_STREAM_PORT", 47329);
@@ -283,7 +283,7 @@ void ConnectAndSendSerializedAllocations()
     int socketFileDescriptor = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (socketFileDescriptor < 0)
     {
-        return;
+        return -1;
     }
 
     sockaddr_in address = {};
@@ -293,15 +293,16 @@ void ConnectAndSendSerializedAllocations()
     if (inet_pton(AF_INET, host, &address.sin_addr) != 1)
     {
         close(socketFileDescriptor);
-        return;
+        return -1;
     }
 
-    if (connect(socketFileDescriptor, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0)
+    if (connect(socketFileDescriptor, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
     {
-        SendSerializedAllocations(socketFileDescriptor);
+        close(socketFileDescriptor);
+        return -1;
     }
 
-    close(socketFileDescriptor);
+    return socketFileDescriptor;
 }
 
 
@@ -362,13 +363,33 @@ bool WaitForStreamingStopSignal()
 //------------------------------------------------------------------------------
 void StreamingThreadMain()
 {
+    int socketFileDescriptor = -1;
+
     while (gStreamingThreadRunning.load(std::memory_order_acquire))
     {
-        ConnectAndSendSerializedAllocations();
+        if (socketFileDescriptor < 0)
+        {
+            socketFileDescriptor = ConnectToVisualizer();
+        }
+
+        if (socketFileDescriptor >= 0)
+        {
+            if (!SendSerializedAllocations(socketFileDescriptor))
+            {
+                close(socketFileDescriptor);
+                socketFileDescriptor = -1;
+            }
+        }
+
         if (WaitForStreamingStopSignal())
         {
             break;
         }
+    }
+
+    if (socketFileDescriptor >= 0)
+    {
+        close(socketFileDescriptor);
     }
 }
 

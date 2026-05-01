@@ -363,17 +363,73 @@ bool WaitForConnection(NativeSocket listenSocket)
 
 
 //------------------------------------------------------------------------------
-// ReceiveSocketData
+// WaitForSocketData
 //------------------------------------------------------------------------------
-//  Read all stream data from a connected native socket.
+//  Wait briefly for a connected socket to become readable.
 //------------------------------------------------------------------------------
-std::string ReceiveSocketData(NativeSocket socketValue)
+bool WaitForSocketData(NativeSocket socketValue)
 {
-    std::string data;
+#ifdef _WIN32
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(socketValue, &readSet);
+
+    timeval timeout = {};
+    timeout.tv_usec = 200000;
+    return select(0, &readSet, nullptr, nullptr, &timeout) > 0;
+#else
+    pollfd descriptor = {};
+    descriptor.fd = socketValue;
+    descriptor.events = POLLIN;
+    return poll(&descriptor, 1, 200) > 0 && (descriptor.revents & POLLIN) != 0;
+#endif
+}
+
+
+//------------------------------------------------------------------------------
+// ReceiveSocketFrame
+//------------------------------------------------------------------------------
+//  Read one complete header/footer-delimited frame from a socket.
+//------------------------------------------------------------------------------
+bool ReceiveSocketFrame(NativeSocket socketValue,
+                        std::string& bufferedData,
+                        std::string& frameData,
+                        const std::atomic_bool& streamingActive)
+{
     std::array<char, 8192> buffer = {};
 
-    while (true)
+    while (streamingActive.load(std::memory_order_acquire))
     {
+        const std::size_t headerOffset = bufferedData.find(SnapshotMagic, 0, sizeof(SnapshotMagic));
+        if (headerOffset != std::string::npos)
+        {
+            if (headerOffset != 0)
+            {
+                bufferedData.erase(0, headerOffset);
+            }
+
+            const std::size_t footerOffset = bufferedData.find(
+                SnapshotFooter,
+                sizeof(SnapshotMagic),
+                sizeof(SnapshotFooter));
+            if (footerOffset != std::string::npos)
+            {
+                const std::size_t frameEndOffset = footerOffset + sizeof(SnapshotFooter);
+                frameData = bufferedData.substr(0, frameEndOffset);
+                bufferedData.erase(0, frameEndOffset);
+                return true;
+            }
+        }
+        else if (bufferedData.size() > sizeof(SnapshotMagic))
+        {
+            bufferedData.erase(0, bufferedData.size() - sizeof(SnapshotMagic) + 1);
+        }
+
+        if (!WaitForSocketData(socketValue))
+        {
+            continue;
+        }
+
 #ifdef _WIN32
         const int bytesRead = recv(socketValue, buffer.data(), static_cast<int>(buffer.size()), 0);
 #else
@@ -381,13 +437,13 @@ std::string ReceiveSocketData(NativeSocket socketValue)
 #endif
         if (bytesRead <= 0)
         {
-            break;
+            return false;
         }
 
-        data.append(buffer.data(), static_cast<std::size_t>(bytesRead));
+        bufferedData.append(buffer.data(), static_cast<std::size_t>(bytesRead));
     }
 
-    return data;
+    return false;
 }
 
 
@@ -493,6 +549,51 @@ std::string BuildByteTickLabel(std::size_t byteCount)
 
     output << suffix;
     return output.str();
+}
+
+
+//------------------------------------------------------------------------------
+// CalculateMedianAllocationSize
+//------------------------------------------------------------------------------
+//  Calculate the median allocation size for a bin.
+//------------------------------------------------------------------------------
+std::size_t CalculateMedianAllocationSize(const std::vector<std::size_t>& allocationSizes)
+{
+    if (allocationSizes.empty())
+    {
+        return 0;
+    }
+
+    std::vector<std::size_t> sortedSizes = allocationSizes;
+    std::sort(sortedSizes.begin(), sortedSizes.end());
+
+    const std::size_t middleIndex = sortedSizes.size() / 2;
+    if ((sortedSizes.size() % 2) != 0)
+    {
+        return sortedSizes[middleIndex];
+    }
+
+    const std::size_t lowerValue = sortedSizes[middleIndex - 1];
+    const std::size_t upperValue = sortedSizes[middleIndex];
+    return lowerValue + ((upperValue - lowerValue) / 2);
+}
+
+
+//------------------------------------------------------------------------------
+// HexDigitCount
+//------------------------------------------------------------------------------
+//  Return the number of hexadecimal digits needed to display a value.
+//------------------------------------------------------------------------------
+int HexDigitCount(std::uintptr_t value)
+{
+    int digitCount = 1;
+    while (value >= 16)
+    {
+        value /= 16;
+        ++digitCount;
+    }
+
+    return digitCount;
 }
 
 
@@ -816,12 +917,14 @@ MainWindow::MainWindow(QWidget* parent)
     QVBoxLayout* overviewLayout = new QVBoxLayout(overviewWidget);
     overviewLayout->setContentsMargins(0, 0, 0, 0);
     mOverviewTable = new QTableWidget(overviewWidget);
+    mOverviewTable->setObjectName(QStringLiteral("OverviewTable"));
     mOverviewTable->setColumnCount(2);
     mOverviewTable->setHorizontalHeaderLabels({tr("Metric"), tr("Value")});
     mOverviewTable->horizontalHeader()->setStretchLastSection(true);
     mOverviewTable->setColumnWidth(0, 220);
     mOverviewTable->verticalHeader()->setVisible(false);
     ConfigureDataTableInteraction(mOverviewTable);
+    mOverviewTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     overviewLayout->addWidget(mOverviewTable);
 
     QWidget* binsWidget = new QWidget(mViewTabs);
@@ -838,12 +941,14 @@ MainWindow::MainWindow(QWidget* parent)
             UpdateSuppressedBinState(minimumSize, maximumSize, suppressed);
         });
     mBinsTable = new QTableWidget(binsSplitter);
-    mBinsTable->setColumnCount(6);
+    mBinsTable->setObjectName(QStringLiteral("BinsTable"));
+    mBinsTable->setColumnCount(7);
     mBinsTable->setHorizontalHeaderLabels(
-        {tr("Range"), tr("Allocations"), tr("Bytes"), tr("Min"), tr("Max"), tr("Average")});
+        {tr("Range"), tr("Allocations"), tr("Bytes"), tr("Min"), tr("Max"), tr("Mean"), tr("Median")});
     mBinsTable->horizontalHeader()->setStretchLastSection(true);
     mBinsTable->verticalHeader()->setVisible(false);
     ConfigureDataTableInteraction(mBinsTable);
+    mBinsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     binsSplitter->addWidget(mBinsGraphWidget);
     binsSplitter->addWidget(mBinsTable);
     binsSplitter->setStretchFactor(0, 3);
@@ -1071,13 +1176,22 @@ void MainWindow::StreamingThreadMain(std::uintptr_t listenSocketValue)
             continue;
         }
 
-        std::string data = ReceiveSocketData(clientSocket);
-        CloseSocket(clientSocket);
-
-        if (!data.empty())
+        std::string bufferedData;
+        while (mStreamingActive.load(std::memory_order_acquire))
         {
-            ParseStreamingData(data);
+            std::string frameData;
+            if (!ReceiveSocketFrame(clientSocket, bufferedData, frameData, mStreamingActive))
+            {
+                break;
+            }
+
+            if (!frameData.empty())
+            {
+                ParseStreamingData(frameData);
+            }
         }
+
+        CloseSocket(clientSocket);
     }
 }
 
@@ -1256,7 +1370,7 @@ void MainWindow::AddAllocationToBin(std::vector<StreamedAllocationBin>& bins,
             }
         }
 
-        bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, 0, false});
+        bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, 0, false, {}});
     }
 
     const auto binIterator = std::find_if(
@@ -1280,6 +1394,7 @@ void MainWindow::AddAllocationToBin(std::vector<StreamedAllocationBin>& bins,
 
     ++binIterator->mAllocationCount;
     binIterator->mAllocationBytes += allocation.mSize;
+    binIterator->mAllocationSizes.push_back(allocation.mSize);
 }
 
 
@@ -1364,7 +1479,7 @@ std::string MainWindow::BuildAddressRangeText(const StreamedAddressRange& range)
 //------------------------------------------------------------------------------
 //  Build display text for a virtual memory address.
 //------------------------------------------------------------------------------
-std::string MainWindow::BuildAddressText(std::uintptr_t address, bool hasAddress) const
+std::string MainWindow::BuildAddressText(std::uintptr_t address, bool hasAddress, int minimumDigits) const
 {
     if (!hasAddress)
     {
@@ -1372,7 +1487,13 @@ std::string MainWindow::BuildAddressText(std::uintptr_t address, bool hasAddress
     }
 
     std::ostringstream output;
-    output << "0x" << std::uppercase << std::hex << address;
+    output << "0x" << std::uppercase << std::hex;
+    if (minimumDigits > 0)
+    {
+        output << std::setfill('0') << std::setw(minimumDigits);
+    }
+
+    output << address;
     return output.str();
 }
 
@@ -1433,6 +1554,9 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 
     const std::uintptr_t rangeStart = summary.mAddressRange.mLowestAddress;
     const std::uintptr_t rangeEnd = CalculateAddressRangeEnd(summary.mAddressRange);
+    const int addressDigitCount = summary.mAddressRange.mHasAllocations
+                                      ? std::max(HexDigitCount(rangeStart), HexDigitCount(rangeEnd))
+                                      : 0;
     const std::size_t addressRange = summary.mAddressRange.mHasAllocations
                                          ? static_cast<std::size_t>(rangeEnd - rangeStart)
                                          : 0;
@@ -1443,8 +1567,8 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
         tr("Allocation count"),
         QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mAllocationCount)));
     SetTableRow(mOverviewTable, 1, tr("Allocation size"), QString::fromStdString(BuildByteCountText(summary.mAllocationBytes)));
-    SetTableRow(mOverviewTable, 2, tr("Start address"), QString::fromStdString(BuildAddressText(rangeStart, summary.mAddressRange.mHasAllocations)), true);
-    SetTableRow(mOverviewTable, 3, tr("End address"), QString::fromStdString(BuildAddressText(rangeEnd, summary.mAddressRange.mHasAllocations)), true);
+    SetTableRow(mOverviewTable, 2, tr("Start address"), QString::fromStdString(BuildAddressText(rangeStart, summary.mAddressRange.mHasAllocations, addressDigitCount)), true);
+    SetTableRow(mOverviewTable, 3, tr("End address"), QString::fromStdString(BuildAddressText(rangeEnd, summary.mAddressRange.mHasAllocations, addressDigitCount)), true);
     SetTableRow(mOverviewTable, 4, tr("Address Range"), QString::fromStdString(BuildHexValueText(addressRange, summary.mAddressRange.mHasAllocations)), true);
     SetTableRow(mOverviewTable, 5, tr("Tracked allocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedAllocations)));
     SetTableRow(mOverviewTable, 6, tr("Tracked deallocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedDeallocations)));
@@ -1476,9 +1600,10 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
     for (int row = 0; row < static_cast<int>(mCurrentBins.size()); ++row)
     {
         const StreamedAllocationBin& bin = mCurrentBins[static_cast<std::size_t>(row)];
-        const std::size_t averageBytes = bin.mAllocationCount == 0
-                                             ? 0
-                                             : bin.mAllocationBytes / bin.mAllocationCount;
+        const std::size_t meanBytes = bin.mAllocationCount == 0
+                                          ? 0
+                                          : bin.mAllocationBytes / bin.mAllocationCount;
+        const std::size_t medianBytes = CalculateMedianAllocationSize(bin.mAllocationSizes);
 
         std::ostringstream rangeText;
         rangeText << BuildBinLimitLabel(bin.mMinimumSize) << "-"
@@ -1493,15 +1618,18 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
             QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMinimumAllocationSize)));
         QTableWidgetItem* maximumItem = new QTableWidgetItem(
             QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMaximumAllocationSize)));
-        QTableWidgetItem* averageItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(averageBytes)));
+        QTableWidgetItem* meanItem = new QTableWidgetItem(
+            QString::fromStdString(BuildCommaSeparatedIntegerText(meanBytes)));
+        QTableWidgetItem* medianItem = new QTableWidgetItem(
+            QString::fromStdString(BuildCommaSeparatedIntegerText(medianBytes)));
 
         rangeItem->setFlags(rangeItem->flags() & ~Qt::ItemIsEditable);
         countItem->setFlags(countItem->flags() & ~Qt::ItemIsEditable);
         bytesItem->setFlags(bytesItem->flags() & ~Qt::ItemIsEditable);
         minimumItem->setFlags(minimumItem->flags() & ~Qt::ItemIsEditable);
         maximumItem->setFlags(maximumItem->flags() & ~Qt::ItemIsEditable);
-        averageItem->setFlags(averageItem->flags() & ~Qt::ItemIsEditable);
+        meanItem->setFlags(meanItem->flags() & ~Qt::ItemIsEditable);
+        medianItem->setFlags(medianItem->flags() & ~Qt::ItemIsEditable);
 
         if (bin.mAllocationCount == 0)
         {
@@ -1511,7 +1639,8 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
             bytesItem->setForeground(emptyBinTextBrush);
             minimumItem->setForeground(emptyBinTextBrush);
             maximumItem->setForeground(emptyBinTextBrush);
-            averageItem->setForeground(emptyBinTextBrush);
+            meanItem->setForeground(emptyBinTextBrush);
+            medianItem->setForeground(emptyBinTextBrush);
         }
 
         mBinsTable->setItem(row, 0, rangeItem);
@@ -1519,7 +1648,8 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
         mBinsTable->setItem(row, 2, bytesItem);
         mBinsTable->setItem(row, 3, minimumItem);
         mBinsTable->setItem(row, 4, maximumItem);
-        mBinsTable->setItem(row, 5, averageItem);
+        mBinsTable->setItem(row, 5, meanItem);
+        mBinsTable->setItem(row, 6, medianItem);
     }
 
     mBinsTable->resizeRowsToContents();

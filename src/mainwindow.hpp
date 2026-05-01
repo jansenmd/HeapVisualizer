@@ -30,6 +30,7 @@ struct StreamedAllocationBin
     std::size_t mMinimumAllocationSize = 0;
     std::size_t mMaximumAllocationSize = 0;
     bool mSuppressed = false;
+    std::vector<std::size_t> mAllocationSizes;
 };
 
 class BinGraphWidget : public QWidget
@@ -112,7 +113,7 @@ private:
     [[nodiscard]] StreamedAllocationSummary BuildAllocationSummary(const StreamedHeapSnapshot& snapshot) const;
     [[nodiscard]] std::uintptr_t CalculateAddressRangeEnd(const StreamedAddressRange& range) const;
     [[nodiscard]] std::string BuildAddressRangeText(const StreamedAddressRange& range) const;
-    [[nodiscard]] std::string BuildAddressText(std::uintptr_t address, bool hasAddress) const;
+    [[nodiscard]] std::string BuildAddressText(std::uintptr_t address, bool hasAddress, int minimumDigits = 0) const;
     [[nodiscard]] std::string BuildHexValueText(std::size_t value, bool hasValue) const;
     [[nodiscard]] std::string BuildByteCountText(std::size_t byteCount) const;
     void UpdateStreamingSummary(const StreamedAllocationSummary& summary);
