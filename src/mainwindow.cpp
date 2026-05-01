@@ -510,7 +510,7 @@ std::string BuildBinLimitLabel(std::size_t byteCount)
 //------------------------------------------------------------------------------
 // BuildByteTickLabel
 //------------------------------------------------------------------------------
-//  Build display text for byte-axis tick marks with decimal precision.
+//  Build display text for byte-axis tick marks with whole-number units.
 //------------------------------------------------------------------------------
 std::string BuildByteTickLabel(std::size_t byteCount)
 {
@@ -519,35 +519,26 @@ std::string BuildByteTickLabel(std::size_t byteCount)
     constexpr std::size_t gigabyte = megabyte * 1024;
 
     const char* suffix = "B";
-    double value = static_cast<double>(byteCount);
+    std::size_t value = byteCount;
 
-    if (byteCount >= gigabyte)
+    if ((byteCount >= gigabyte) && ((byteCount % gigabyte) == 0))
     {
         suffix = "GB";
-        value /= static_cast<double>(gigabyte);
+        value /= gigabyte;
     }
-    else if (byteCount >= megabyte)
+    else if ((byteCount >= megabyte) && ((byteCount % megabyte) == 0))
     {
         suffix = "MB";
-        value /= static_cast<double>(megabyte);
+        value /= megabyte;
     }
-    else if (byteCount >= kilobyte)
+    else if ((byteCount >= kilobyte) && ((byteCount % kilobyte) == 0))
     {
         suffix = "KB";
-        value /= static_cast<double>(kilobyte);
+        value /= kilobyte;
     }
 
     std::ostringstream output;
-    if (byteCount >= kilobyte)
-    {
-        output << std::fixed << std::setprecision(1) << value;
-    }
-    else
-    {
-        output << static_cast<std::size_t>(value);
-    }
-
-    output << suffix;
+    output << value << suffix;
     return output.str();
 }
 
@@ -576,6 +567,33 @@ std::size_t CalculateMedianAllocationSize(const std::vector<std::size_t>& alloca
     const std::size_t lowerValue = sortedSizes[middleIndex - 1];
     const std::size_t upperValue = sortedSizes[middleIndex];
     return lowerValue + ((upperValue - lowerValue) / 2);
+}
+
+
+//------------------------------------------------------------------------------
+// RoundUpToPowerOfTwo
+//------------------------------------------------------------------------------
+//  Round a value up to the next power of two.
+//------------------------------------------------------------------------------
+std::size_t RoundUpToPowerOfTwo(std::size_t value)
+{
+    if (value <= 1)
+    {
+        return 1;
+    }
+
+    std::size_t roundedValue = 1;
+    while (roundedValue < value)
+    {
+        if (roundedValue > (std::numeric_limits<std::size_t>::max() / 2))
+        {
+            return std::numeric_limits<std::size_t>::max();
+        }
+
+        roundedValue *= 2;
+    }
+
+    return roundedValue;
 }
 
 
@@ -701,6 +719,10 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     if (maximumBytes == 0)
     {
         maximumBytes = 1;
+    }
+    else
+    {
+        maximumBytes = RoundUpToPowerOfTwo(maximumBytes);
     }
 
     if (maximumAllocations == 0)
