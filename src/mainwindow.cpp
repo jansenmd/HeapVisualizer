@@ -1683,15 +1683,15 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
         AllocationOperationType::Calloc,
         AllocationOperationType::Realloc,
         AllocationOperationType::ReallocArray,
-        AllocationOperationType::PosixMemalign,
         AllocationOperationType::AlignedAlloc,
         AllocationOperationType::Memalign,
+        AllocationOperationType::PosixMemalign,
         AllocationOperationType::Valloc,
         AllocationOperationType::PValloc};
     constexpr std::array deallocationDisplayTypes = {
+        AllocationOperationType::Free,
         AllocationOperationType::Realloc,
         AllocationOperationType::ReallocArray,
-        AllocationOperationType::Free,
         AllocationOperationType::CFree};
     constexpr int baseRowCount = 10;
     const int rowCount = baseRowCount +
