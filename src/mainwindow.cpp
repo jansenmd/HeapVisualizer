@@ -107,30 +107,31 @@ QString AllocationOperationName(HeapVisualizer::AllocationHooks::AllocationType 
 
     switch (type)
     {
-    case AllocationType::Malloc:
-        return QStringLiteral("malloc");
-    case AllocationType::Calloc:
-        return QStringLiteral("calloc");
-    case AllocationType::Realloc:
-        return QStringLiteral("realloc");
-    case AllocationType::ReallocArray:
-        return QStringLiteral("reallocarray");
-    case AllocationType::Free:
-        return QStringLiteral("free");
-    case AllocationType::CFree:
-        return QStringLiteral("cfree");
-    case AllocationType::PosixMemalign:
-        return QStringLiteral("posix_memalign");
-    case AllocationType::AlignedAlloc:
-        return QStringLiteral("aligned_alloc");
-    case AllocationType::Memalign:
-        return QStringLiteral("memalign");
-    case AllocationType::Valloc:
-        return QStringLiteral("valloc");
-    case AllocationType::PValloc:
-        return QStringLiteral("pvalloc");
-    case AllocationType::Count:
-        break;
+        case AllocationType::Malloc:
+            return QStringLiteral("malloc");
+        case AllocationType::Calloc:
+            return QStringLiteral("calloc");
+        case AllocationType::Realloc:
+            return QStringLiteral("realloc");
+        case AllocationType::ReallocArray:
+            return QStringLiteral("reallocarray");
+        case AllocationType::Free:
+            return QStringLiteral("free");
+        case AllocationType::CFree:
+            return QStringLiteral("cfree");
+        case AllocationType::PosixMemalign:
+            return QStringLiteral("posix_memalign");
+        case AllocationType::AlignedAlloc:
+            return QStringLiteral("aligned_alloc");
+        case AllocationType::Memalign:
+            return QStringLiteral("memalign");
+        case AllocationType::Valloc:
+            return QStringLiteral("valloc");
+        case AllocationType::PValloc:
+            return QStringLiteral("pvalloc");
+        case AllocationType::Count:
+        default:
+            break;
     }
 
     return QStringLiteral("unknown");
@@ -171,10 +172,10 @@ bool ReadUInt32(const std::string& data, std::size_t& offset, std::uint32_t& val
         return false;
     }
 
-    value = static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset])) |
-            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 1])) << 8U) |
-            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 2])) << 16U) |
-            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 3])) << 24U);
+    value = (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 0])) <<  0) |
+            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 1])) <<  8) |
+            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 2])) << 16) |
+            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 3])) << 24);
     offset += sizeof(std::uint32_t);
     return true;
 }
@@ -193,10 +194,9 @@ bool ReadUInt64(const std::string& data, std::size_t& offset, std::uint64_t& val
     }
 
     value = 0;
-    for (std::size_t byteIndex = 0; byteIndex < sizeof(std::uint64_t); ++byteIndex)
+    for (std::size_t byteIndex = 0; byteIndex < sizeof(std::uint64_t); byteIndex++)
     {
-        value |= static_cast<std::uint64_t>(static_cast<unsigned char>(data[offset + byteIndex])) <<
-                 (byteIndex * 8U);
+        value |= static_cast<std::uint64_t>(static_cast<uint8_t>(data[offset + byteIndex])) << (byteIndex * 8);
     }
 
     offset += sizeof(std::uint64_t);
@@ -231,14 +231,14 @@ void CopyTableSelectionToClipboard(QTableWidget* tableWidget)
 
     QString text;
     const QTableWidgetSelectionRange range = selectedRanges.front();
-    for (int row = range.topRow(); row <= range.bottomRow(); ++row)
+    for (int row = range.topRow(); row <= range.bottomRow(); row++)
     {
         if (row > range.topRow())
         {
             text += QLatin1Char('\n');
         }
 
-        for (int column = range.leftColumn(); column <= range.rightColumn(); ++column)
+        for (int column = range.leftColumn(); column <= range.rightColumn(); column++)
         {
             if (column > range.leftColumn())
             {
@@ -520,7 +520,7 @@ bool ReceiveSocketFrame(NativeSocket socketValue,
 //------------------------------------------------------------------------------
 //  Build display text for an integer with comma group separators.
 //------------------------------------------------------------------------------
-std::string BuildCommaSeparatedIntegerText(unsigned long long value)
+std::string BuildCommaSeparatedIntegerText(uint64_t value)
 {
     std::string text = std::to_string(value);
     for (int insertPosition = static_cast<int>(text.size()) - 3;
@@ -652,7 +652,6 @@ std::size_t RoundUpToPowerOfTwo(std::size_t value)
         {
             return std::numeric_limits<std::size_t>::max();
         }
-
         roundedValue *= 2;
     }
 
@@ -671,9 +670,8 @@ int HexDigitCount(std::uintptr_t value)
     while (value >= 16)
     {
         value /= 16;
-        ++digitCount;
+        digitCount++;
     }
-
     return digitCount;
 }
 
@@ -808,7 +806,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     painter.setFont(labelFont);
 
     constexpr int tickCount = 5;
-    for (int tickIndex = 0; tickIndex < tickCount; ++tickIndex)
+    for (int tickIndex = 0; tickIndex < tickCount; tickIndex++)
     {
         const double scale = static_cast<double>(tickIndex) / static_cast<double>(tickCount - 1);
         const int y = chartRect.bottom() -
@@ -843,7 +841,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(QStringLiteral("#2f80ed")));
 
-    for (int binIndex = 0; binIndex < binCount; ++binIndex)
+    for (int binIndex = 0; binIndex < binCount; binIndex++)
     {
         const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
         const std::size_t allocationBytes = bin.mSuppressed ? 0 : bin.mAllocationBytes;
@@ -858,7 +856,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     std::vector<QPointF> countPoints;
     countPoints.reserve(mBins.size());
 
-    for (int binIndex = 0; binIndex < binCount; ++binIndex)
+    for (int binIndex = 0; binIndex < binCount; binIndex++)
     {
         const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
         const std::size_t allocationCount = bin.mSuppressed ? 0 : bin.mAllocationCount;
@@ -886,7 +884,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     QFont binLabelFont = painter.font();
     binLabelFont.setWeight(QFont::DemiBold);
     painter.setFont(binLabelFont);
-    for (int binIndex = 0; binIndex < binCount; ++binIndex)
+    for (int binIndex = 0; binIndex < binCount; binIndex++)
     {
         const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
         const int labelX = chartRect.left() + (binIndex * slotWidth);
@@ -960,7 +958,7 @@ void BinGraphWidget::UpdateBinControls()
     const int binCount = static_cast<int>(mBins.size());
     const int slotWidth = binCount == 0 ? 1 : std::max(1, chartRect.width() / binCount);
 
-    for (std::size_t binIndex = 0; binIndex < mBinCheckBoxes.size(); ++binIndex)
+    for (std::size_t binIndex = 0; binIndex < mBinCheckBoxes.size(); binIndex++)
     {
         QCheckBox* checkBox = mBinCheckBoxes[binIndex];
         const bool binVisible = binIndex < mBins.size();
@@ -1326,12 +1324,12 @@ void MainWindow::ParseStreamingData(const std::string& data)
 
     snapshot.mAllocationCount = static_cast<std::size_t>(allocationCount);
     snapshot.mAllocationBytes = static_cast<std::size_t>(allocationBytes);
-    snapshot.mTrackedAllocations = static_cast<unsigned long long>(trackedAllocations);
-    snapshot.mTrackedDeallocations = static_cast<unsigned long long>(trackedDeallocations);
-    snapshot.mUntrackedAllocations = static_cast<unsigned long long>(untrackedAllocations);
-    snapshot.mUntrackedDeallocations = static_cast<unsigned long long>(untrackedDeallocations);
+    snapshot.mTrackedAllocations = static_cast<std::uint64_t>(trackedAllocations);
+    snapshot.mTrackedDeallocations = static_cast<std::uint64_t>(trackedDeallocations);
+    snapshot.mUntrackedAllocations = static_cast<std::uint64_t>(untrackedAllocations);
+    snapshot.mUntrackedDeallocations = static_cast<std::uint64_t>(untrackedDeallocations);
 
-    for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; ++typeIndex)
+    for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; typeIndex++)
     {
         std::uint64_t typeCount = 0;
         if (!ReadUInt64(data, offset, typeCount))
@@ -1339,10 +1337,10 @@ void MainWindow::ParseStreamingData(const std::string& data)
             return;
         }
 
-        snapshot.mTrackedAllocationsByType[typeIndex] = static_cast<unsigned long long>(typeCount);
+        snapshot.mTrackedAllocationsByType[typeIndex] = static_cast<std::uint64_t>(typeCount);
     }
 
-    for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; ++typeIndex)
+    for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; typeIndex++)
     {
         std::uint64_t typeCount = 0;
         if (!ReadUInt64(data, offset, typeCount))
@@ -1350,10 +1348,10 @@ void MainWindow::ParseStreamingData(const std::string& data)
             return;
         }
 
-        snapshot.mTrackedDeallocationsByType[typeIndex] = static_cast<unsigned long long>(typeCount);
+        snapshot.mTrackedDeallocationsByType[typeIndex] = static_cast<std::uint64_t>(typeCount);
     }
 
-    for (std::uint64_t allocationIndex = 0; allocationIndex < allocationCount; ++allocationIndex)
+    for (std::uint64_t allocationIndex = 0; allocationIndex < allocationCount; allocationIndex++)
     {
         std::uint64_t address = 0;
         std::uint64_t size = 0;
@@ -1489,7 +1487,7 @@ void MainWindow::AddAllocationToBin(std::vector<StreamedAllocationBin>& bins,
         binIterator->mMaximumAllocationSize = std::max(binIterator->mMaximumAllocationSize, allocation.mSize);
     }
 
-    ++binIterator->mAllocationCount;
+    binIterator->mAllocationCount++;
     binIterator->mAllocationBytes += allocation.mSize;
     binIterator->mAllocationSizes.push_back(allocation.mSize);
 }
@@ -1516,7 +1514,7 @@ MainWindow::StreamedAllocationSummary MainWindow::BuildAllocationSummary(const S
     {
         if (snapshot.mAllocationCount == 0)
         {
-            ++summary.mAllocationCount;
+            summary.mAllocationCount++;
             summary.mAllocationBytes += allocation.mSize;
         }
 
@@ -1694,7 +1692,7 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 
     for (AllocationType type : allocationDisplayTypes)
     {
-        const unsigned long long operationCount = summary.mTrackedAllocationsByType[OperationTypeIndex(type)];
+        const std::uint64_t operationCount = summary.mTrackedAllocationsByType[OperationTypeIndex(type)];
         SetTableRow(
             mOverviewTable,
             row++,
@@ -1708,7 +1706,7 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 
     for (AllocationType type : deallocationDisplayTypes)
     {
-        const unsigned long long operationCount = summary.mTrackedDeallocationsByType[OperationTypeIndex(type)];
+        const std::uint64_t operationCount = summary.mTrackedDeallocationsByType[OperationTypeIndex(type)];
         SetTableRow(
             mOverviewTable,
             row++,
@@ -1743,7 +1741,7 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
     mBinsGraphWidget->SetBins(mCurrentBins);
     mBinsTable->setRowCount(static_cast<int>(mCurrentBins.size()));
 
-    for (int row = 0; row < static_cast<int>(mCurrentBins.size()); ++row)
+    for (int row = 0; row < static_cast<int>(mCurrentBins.size()); row++)
     {
         const StreamedAllocationBin& bin = mCurrentBins[static_cast<std::size_t>(row)];
         const std::size_t meanBytes = bin.mAllocationCount == 0

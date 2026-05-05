@@ -28,8 +28,8 @@ struct StreamedAllocationBin
 {
     std::size_t mMinimumSize = 0;
     std::size_t mMaximumSize = 0;
-    std::size_t mAllocationCount = 0;
-    std::size_t mAllocationBytes = 0;
+    std::uint64_t mAllocationCount = 0;
+    std::uint64_t mAllocationBytes = 0;
     std::size_t mMinimumAllocationSize = 0;
     std::size_t mMaximumAllocationSize = 0;
     bool mSuppressed = false;
@@ -78,15 +78,13 @@ private:
         std::vector<StreamedAllocation> mAllocations;
         std::size_t mAllocationCount = 0;
         std::size_t mAllocationBytes = 0;
-        unsigned long long mTrackedAllocations = 0;
-        unsigned long long mTrackedDeallocations = 0;
-        unsigned long long mUntrackedAllocations = 0;
-        unsigned long long mUntrackedDeallocations = 0;
-        std::array<unsigned long long,
-                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
+        std::uint64_t mTrackedAllocations = 0;
+        std::uint64_t mTrackedDeallocations = 0;
+        std::uint64_t mUntrackedAllocations = 0;
+        std::uint64_t mUntrackedDeallocations = 0;
+        std::array<std::uint64_t, static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
             mTrackedAllocationsByType = {};
-        std::array<unsigned long long,
-                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
+        std::array<std::uint64_t, static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
             mTrackedDeallocationsByType = {};
     };
 
@@ -104,15 +102,13 @@ private:
         std::size_t mAllocationCount = 0;
         std::size_t mAllocationBytes = 0;
         StreamedAddressRange mAddressRange;
-        unsigned long long mTrackedAllocations = 0;
-        unsigned long long mTrackedDeallocations = 0;
-        unsigned long long mUntrackedAllocations = 0;
-        unsigned long long mUntrackedDeallocations = 0;
-        std::array<unsigned long long,
-                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
+        std::uint64_t mTrackedAllocations = 0;
+        std::uint64_t mTrackedDeallocations = 0;
+        std::uint64_t mUntrackedAllocations = 0;
+        std::uint64_t mUntrackedDeallocations = 0;
+        std::array<std::uint64_t, static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
             mTrackedAllocationsByType = {};
-        std::array<unsigned long long,
-                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
+        std::array<std::uint64_t, static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
             mTrackedDeallocationsByType = {};
         std::vector<StreamedAllocationBin> mBins;
     };
