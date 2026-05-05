@@ -67,7 +67,6 @@ public:
 private:
     struct StreamedAllocation
     {
-        std::string mPool;
         std::uintptr_t mAddress = 0;
         std::size_t mSize = 0;
         HeapVisualizer::AllocationHooks::AllocationOperationType mType =

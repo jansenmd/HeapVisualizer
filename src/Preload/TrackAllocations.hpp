@@ -22,8 +22,7 @@ enum class AllocationOperationType : std::uint32_t
     Count
 };
 
-void TrackAllocationTarget(void* pointer, std::size_t size, AllocationOperationType type);
-void TrackAllocationInternal(void* pointer, std::size_t size, AllocationOperationType type);
+void TrackAllocation(void* pointer, std::size_t size, AllocationOperationType type);
 void UntrackAllocation(void* pointer, AllocationOperationType type);
 
 }

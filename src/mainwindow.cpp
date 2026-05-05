@@ -70,8 +70,6 @@ constexpr NativeSocket InvalidSocket = -1;
 
 constexpr char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
 constexpr char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
-constexpr std::uint32_t PoolIdentifierMain = 0;
-constexpr std::uint32_t PoolIdentifierInternal = 1;
 constexpr std::size_t AllocationOperationTypeCount =
     static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count);
 
@@ -1309,98 +1307,72 @@ void MainWindow::ParseStreamingData(const std::string& data)
 
     offset += sizeof(SnapshotMagic);
 
-    std::uint32_t poolCount = 0;
-    if (!ReadUInt32(data, offset, poolCount))
+    std::uint64_t allocationCount = 0;
+    std::uint64_t allocationBytes = 0;
+    std::uint64_t trackedAllocations = 0;
+    std::uint64_t trackedDeallocations = 0;
+    std::uint64_t untrackedAllocations = 0;
+    std::uint64_t untrackedDeallocations = 0;
+
+    if ((!ReadUInt64(data, offset, allocationCount)) ||
+        (!ReadUInt64(data, offset, allocationBytes)) ||
+        (!ReadUInt64(data, offset, trackedAllocations)) ||
+        (!ReadUInt64(data, offset, trackedDeallocations)) ||
+        (!ReadUInt64(data, offset, untrackedAllocations)) ||
+        (!ReadUInt64(data, offset, untrackedDeallocations)))
     {
         return;
     }
 
-    for (std::uint32_t poolIndex = 0; poolIndex < poolCount; ++poolIndex)
+    snapshot.mAllocationCount = static_cast<std::size_t>(allocationCount);
+    snapshot.mAllocationBytes = static_cast<std::size_t>(allocationBytes);
+    snapshot.mTrackedAllocations = static_cast<unsigned long long>(trackedAllocations);
+    snapshot.mTrackedDeallocations = static_cast<unsigned long long>(trackedDeallocations);
+    snapshot.mUntrackedAllocations = static_cast<unsigned long long>(untrackedAllocations);
+    snapshot.mUntrackedDeallocations = static_cast<unsigned long long>(untrackedDeallocations);
+
+    for (std::size_t typeIndex = 0; typeIndex < AllocationOperationTypeCount; ++typeIndex)
     {
-        std::uint32_t poolIdentifier = 0;
-        std::uint64_t allocationCount = 0;
-        std::uint64_t allocationBytes = 0;
-        std::uint64_t trackedAllocations = 0;
-        std::uint64_t trackedDeallocations = 0;
-        std::uint64_t untrackedAllocations = 0;
-        std::uint64_t untrackedDeallocations = 0;
-
-        if ((!ReadUInt32(data, offset, poolIdentifier)) ||
-            (!ReadUInt64(data, offset, allocationCount)) ||
-            (!ReadUInt64(data, offset, allocationBytes)) ||
-            (!ReadUInt64(data, offset, trackedAllocations)) ||
-            (!ReadUInt64(data, offset, trackedDeallocations)) ||
-            (!ReadUInt64(data, offset, untrackedAllocations)) ||
-            (!ReadUInt64(data, offset, untrackedDeallocations)))
+        std::uint64_t typeCount = 0;
+        if (!ReadUInt64(data, offset, typeCount))
         {
             return;
         }
 
-        std::string poolName;
-        if (poolIdentifier == PoolIdentifierMain)
-        {
-            poolName = "main";
-        }
-        else if (poolIdentifier == PoolIdentifierInternal)
-        {
-            poolName = "internal";
-        }
-        else
+        snapshot.mTrackedAllocationsByType[typeIndex] = static_cast<unsigned long long>(typeCount);
+    }
+
+    for (std::size_t typeIndex = 0; typeIndex < AllocationOperationTypeCount; ++typeIndex)
+    {
+        std::uint64_t typeCount = 0;
+        if (!ReadUInt64(data, offset, typeCount))
         {
             return;
         }
 
-        snapshot.mAllocationCount += static_cast<std::size_t>(allocationCount);
-        snapshot.mAllocationBytes += static_cast<std::size_t>(allocationBytes);
-        snapshot.mTrackedAllocations += static_cast<unsigned long long>(trackedAllocations);
-        snapshot.mTrackedDeallocations += static_cast<unsigned long long>(trackedDeallocations);
-        snapshot.mUntrackedAllocations += static_cast<unsigned long long>(untrackedAllocations);
-        snapshot.mUntrackedDeallocations += static_cast<unsigned long long>(untrackedDeallocations);
+        snapshot.mTrackedDeallocationsByType[typeIndex] = static_cast<unsigned long long>(typeCount);
+    }
 
-        for (std::size_t typeIndex = 0; typeIndex < AllocationOperationTypeCount; ++typeIndex)
+    for (std::uint64_t allocationIndex = 0; allocationIndex < allocationCount; ++allocationIndex)
+    {
+        std::uint64_t address = 0;
+        std::uint64_t size = 0;
+        std::uint32_t typeValue = 0;
+
+        if ((!ReadUInt64(data, offset, address)) ||
+            (!ReadUInt64(data, offset, size)) ||
+            (!ReadUInt32(data, offset, typeValue)))
         {
-            std::uint64_t typeCount = 0;
-            if (!ReadUInt64(data, offset, typeCount))
-            {
-                return;
-            }
-
-            snapshot.mTrackedAllocationsByType[typeIndex] += static_cast<unsigned long long>(typeCount);
+            return;
         }
 
-        for (std::size_t typeIndex = 0; typeIndex < AllocationOperationTypeCount; ++typeIndex)
+        const auto type = static_cast<HeapVisualizer::AllocationHooks::AllocationOperationType>(typeValue);
+        if (!IsValidOperationType(type))
         {
-            std::uint64_t typeCount = 0;
-            if (!ReadUInt64(data, offset, typeCount))
-            {
-                return;
-            }
-
-            snapshot.mTrackedDeallocationsByType[typeIndex] += static_cast<unsigned long long>(typeCount);
+            return;
         }
 
-        for (std::uint64_t allocationIndex = 0; allocationIndex < allocationCount; ++allocationIndex)
-        {
-            std::uint64_t address = 0;
-            std::uint64_t size = 0;
-            std::uint32_t typeValue = 0;
-
-            if ((!ReadUInt64(data, offset, address)) ||
-                (!ReadUInt64(data, offset, size)) ||
-                (!ReadUInt32(data, offset, typeValue)))
-            {
-                return;
-            }
-
-            const auto type = static_cast<HeapVisualizer::AllocationHooks::AllocationOperationType>(typeValue);
-            if (!IsValidOperationType(type))
-            {
-                return;
-            }
-
-            snapshot.mAllocations.push_back(
-                {poolName, static_cast<std::uintptr_t>(address), static_cast<std::size_t>(size), type});
-        }
+        snapshot.mAllocations.push_back({static_cast<std::uintptr_t>(address), static_cast<std::size_t>(size), type});
     }
 
     if ((data.size() - offset != sizeof(SnapshotFooter)) ||
