@@ -41,10 +41,7 @@ static const long StreamingIntervalNanoseconds = 100000000;
 static void* const TombstoneAddress = (void*)(uintptr_t)1;
 
 static pthread_mutex_t gStreamingWaitMutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t gStreamingStopCondition = PTHREAD_COND_INITIALIZER;
 static pthread_t gStreamingThread;
-static bool gStreamingThreadRunning = false;
-static bool gStreamingThreadStarted = false;
 
 // Track up to 1 million allocations
 #define NUM_ALLOCATION_RECORDS      0x100000
@@ -367,49 +364,6 @@ static struct timespec StreamingIntervalFromNow(void)
 
 
 //------------------------------------------------------------------------------
-// IsStreamingThreadRunning
-//------------------------------------------------------------------------------
-//  Return whether the streaming thread should continue running.
-//------------------------------------------------------------------------------
-static bool IsStreamingThreadRunning(void)
-{
-    bool running = false;
-    pthread_mutex_lock(&gStreamingWaitMutex);
-    running = gStreamingThreadRunning;
-    pthread_mutex_unlock(&gStreamingWaitMutex);
-    return running;
-}
-
-
-//------------------------------------------------------------------------------
-// WaitForStreamingStopSignal
-//------------------------------------------------------------------------------
-//  Wait up to one streaming interval for the streaming thread to stop.
-//------------------------------------------------------------------------------
-static bool WaitForStreamingStopSignal(void)
-{
-    const struct timespec timeout = StreamingIntervalFromNow();
-    bool stopRequested = false;
-
-    pthread_mutex_lock(&gStreamingWaitMutex);
-
-    while (gStreamingThreadRunning)
-    {
-        const int waitResult = pthread_cond_timedwait(&gStreamingStopCondition, &gStreamingWaitMutex, &timeout);
-        if (waitResult == ETIMEDOUT)
-        {
-            break;
-        }
-    }
-
-    stopRequested = gStreamingThreadRunning == 0;
-    pthread_mutex_unlock(&gStreamingWaitMutex);
-
-    return stopRequested;
-}
-
-
-//------------------------------------------------------------------------------
 // StreamingThreadMain
 //------------------------------------------------------------------------------
 //  Periodically connect to the visualizer and send allocation snapshots.
@@ -420,7 +374,7 @@ static void* StreamingThreadMain(void* arg)
 
     int fd = -1;
 
-    while (IsStreamingThreadRunning())
+    while (true)
     {
         if (fd < 0)
         {
@@ -436,14 +390,24 @@ static void* StreamingThreadMain(void* arg)
             }
         }
 
-        if (WaitForStreamingStopSignal())
+        // Sleep until told to stop or time to try sending again.
+        const struct timespec timeout = StreamingIntervalFromNow();
+        const int waitResult = pthread_mutex_timedlock(&gStreamingWaitMutex, &timeout);
+        if (waitResult == ETIMEDOUT)
         {
+            continue;
+        }
+        if (waitResult == 0)
+        {
+            pthread_mutex_unlock(&gStreamingWaitMutex);
             break;
         }
     }
 
     if (fd >= 0)
     {
+        // Do one final send if still open.
+        (void)SendSerializedAllocations(fd);
         close(fd);
     }
 
@@ -458,30 +422,12 @@ static void* StreamingThreadMain(void* arg)
 //------------------------------------------------------------------------------
 static void StartStreamingThread(void)
 {
-    int createResult = 0;
-
     pthread_mutex_lock(&gStreamingWaitMutex);
-    if (gStreamingThreadRunning)
+
+    if (pthread_create(&gStreamingThread, NULL, StreamingThreadMain, NULL) != 0)
     {
         pthread_mutex_unlock(&gStreamingWaitMutex);
-        return;
     }
-
-    gStreamingThreadRunning = true;
-    pthread_mutex_unlock(&gStreamingWaitMutex);
-
-    createResult = pthread_create(&gStreamingThread, NULL, StreamingThreadMain, NULL);
-
-    pthread_mutex_lock(&gStreamingWaitMutex);
-    if (createResult == 0)
-    {
-        gStreamingThreadStarted = true;
-    }
-    else
-    {
-        gStreamingThreadRunning = false;
-    }
-    pthread_mutex_unlock(&gStreamingWaitMutex);
 }
 
 
@@ -492,27 +438,8 @@ static void StartStreamingThread(void)
 //------------------------------------------------------------------------------
 static void StopStreamingThread(void)
 {
-    bool shouldJoin = false;
-
-    pthread_mutex_lock(&gStreamingWaitMutex);
-    if (!gStreamingThreadRunning && !gStreamingThreadStarted)
-    {
-        pthread_mutex_unlock(&gStreamingWaitMutex);
-        return;
-    }
-
-    gStreamingThreadRunning = false;
-    shouldJoin = gStreamingThreadStarted;
-    pthread_cond_signal(&gStreamingStopCondition);
     pthread_mutex_unlock(&gStreamingWaitMutex);
-
-    if (shouldJoin)
-    {
-        pthread_join(gStreamingThread, NULL);
-        pthread_mutex_lock(&gStreamingWaitMutex);
-        gStreamingThreadStarted = false;
-        pthread_mutex_unlock(&gStreamingWaitMutex);
-    }
+    pthread_join(gStreamingThread, NULL);
 }
 
 
