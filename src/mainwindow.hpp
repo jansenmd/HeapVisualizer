@@ -3,7 +3,7 @@
 #include <QMainWindow>
 #include <QWidget>
 
-#include "Preload/TrackAllocations.hpp"
+#include "Preload/TrackAllocations.h"
 
 #include <array>
 #include <cstdint>
@@ -69,8 +69,8 @@ private:
     {
         std::uintptr_t mAddress = 0;
         std::size_t mSize = 0;
-        HeapVisualizer::AllocationHooks::AllocationOperationType mType =
-            HeapVisualizer::AllocationHooks::AllocationOperationType::Malloc;
+        HeapVisualizer::AllocationHooks::AllocationType mType =
+            HeapVisualizer::AllocationHooks::AllocationType::Malloc;
     };
 
     struct StreamedHeapSnapshot
@@ -83,10 +83,10 @@ private:
         unsigned long long mUntrackedAllocations = 0;
         unsigned long long mUntrackedDeallocations = 0;
         std::array<unsigned long long,
-                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
             mTrackedAllocationsByType = {};
         std::array<unsigned long long,
-                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
             mTrackedDeallocationsByType = {};
     };
 
@@ -109,10 +109,10 @@ private:
         unsigned long long mUntrackedAllocations = 0;
         unsigned long long mUntrackedDeallocations = 0;
         std::array<unsigned long long,
-                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
             mTrackedAllocationsByType = {};
         std::array<unsigned long long,
-                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count)>
+                   static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
             mTrackedDeallocationsByType = {};
         std::vector<StreamedAllocationBin> mBins;
     };

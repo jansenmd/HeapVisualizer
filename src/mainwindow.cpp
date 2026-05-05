@@ -70,8 +70,8 @@ constexpr NativeSocket InvalidSocket = -1;
 
 constexpr char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
 constexpr char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
-constexpr std::size_t AllocationOperationTypeCount =
-    static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationOperationType::Count);
+constexpr std::size_t AllocationTypeCount =
+    static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count);
 
 
 //------------------------------------------------------------------------------
@@ -79,7 +79,7 @@ constexpr std::size_t AllocationOperationTypeCount =
 //------------------------------------------------------------------------------
 //  Convert an allocation operation type into a count-array index.
 //------------------------------------------------------------------------------
-std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationOperationType type)
+std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType type)
 {
     return static_cast<std::size_t>(type);
 }
@@ -90,9 +90,9 @@ std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationOperat
 //------------------------------------------------------------------------------
 //  Return whether an allocation operation type is inside the known range.
 //------------------------------------------------------------------------------
-bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationOperationType type)
+bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type)
 {
-    return OperationTypeIndex(type) < AllocationOperationTypeCount;
+    return OperationTypeIndex(type) < AllocationTypeCount;
 }
 
 
@@ -101,35 +101,35 @@ bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationOperationTy
 //------------------------------------------------------------------------------
 //  Return the display name for an allocation operation type.
 //------------------------------------------------------------------------------
-QString AllocationOperationName(HeapVisualizer::AllocationHooks::AllocationOperationType type)
+QString AllocationOperationName(HeapVisualizer::AllocationHooks::AllocationType type)
 {
-    using HeapVisualizer::AllocationHooks::AllocationOperationType;
+    using HeapVisualizer::AllocationHooks::AllocationType;
 
     switch (type)
     {
-    case AllocationOperationType::Malloc:
+    case AllocationType::Malloc:
         return QStringLiteral("malloc");
-    case AllocationOperationType::Calloc:
+    case AllocationType::Calloc:
         return QStringLiteral("calloc");
-    case AllocationOperationType::Realloc:
+    case AllocationType::Realloc:
         return QStringLiteral("realloc");
-    case AllocationOperationType::ReallocArray:
+    case AllocationType::ReallocArray:
         return QStringLiteral("reallocarray");
-    case AllocationOperationType::Free:
+    case AllocationType::Free:
         return QStringLiteral("free");
-    case AllocationOperationType::CFree:
+    case AllocationType::CFree:
         return QStringLiteral("cfree");
-    case AllocationOperationType::PosixMemalign:
+    case AllocationType::PosixMemalign:
         return QStringLiteral("posix_memalign");
-    case AllocationOperationType::AlignedAlloc:
+    case AllocationType::AlignedAlloc:
         return QStringLiteral("aligned_alloc");
-    case AllocationOperationType::Memalign:
+    case AllocationType::Memalign:
         return QStringLiteral("memalign");
-    case AllocationOperationType::Valloc:
+    case AllocationType::Valloc:
         return QStringLiteral("valloc");
-    case AllocationOperationType::PValloc:
+    case AllocationType::PValloc:
         return QStringLiteral("pvalloc");
-    case AllocationOperationType::Count:
+    case AllocationType::Count:
         break;
     }
 
@@ -1331,7 +1331,7 @@ void MainWindow::ParseStreamingData(const std::string& data)
     snapshot.mUntrackedAllocations = static_cast<unsigned long long>(untrackedAllocations);
     snapshot.mUntrackedDeallocations = static_cast<unsigned long long>(untrackedDeallocations);
 
-    for (std::size_t typeIndex = 0; typeIndex < AllocationOperationTypeCount; ++typeIndex)
+    for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; ++typeIndex)
     {
         std::uint64_t typeCount = 0;
         if (!ReadUInt64(data, offset, typeCount))
@@ -1342,7 +1342,7 @@ void MainWindow::ParseStreamingData(const std::string& data)
         snapshot.mTrackedAllocationsByType[typeIndex] = static_cast<unsigned long long>(typeCount);
     }
 
-    for (std::size_t typeIndex = 0; typeIndex < AllocationOperationTypeCount; ++typeIndex)
+    for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; ++typeIndex)
     {
         std::uint64_t typeCount = 0;
         if (!ReadUInt64(data, offset, typeCount))
@@ -1366,7 +1366,7 @@ void MainWindow::ParseStreamingData(const std::string& data)
             return;
         }
 
-        const auto type = static_cast<HeapVisualizer::AllocationHooks::AllocationOperationType>(typeValue);
+        const auto type = static_cast<HeapVisualizer::AllocationHooks::AllocationType>(typeValue);
         if (!IsValidOperationType(type))
         {
             return;
@@ -1648,23 +1648,23 @@ void MainWindow::UpdateStreamingSummary(const StreamedAllocationSummary& summary
 //------------------------------------------------------------------------------
 void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 {
-    using HeapVisualizer::AllocationHooks::AllocationOperationType;
+    using HeapVisualizer::AllocationHooks::AllocationType;
 
     constexpr std::array allocationDisplayTypes = {
-        AllocationOperationType::Malloc,
-        AllocationOperationType::Calloc,
-        AllocationOperationType::Realloc,
-        AllocationOperationType::ReallocArray,
-        AllocationOperationType::AlignedAlloc,
-        AllocationOperationType::Memalign,
-        AllocationOperationType::PosixMemalign,
-        AllocationOperationType::Valloc,
-        AllocationOperationType::PValloc};
+        AllocationType::Malloc,
+        AllocationType::Calloc,
+        AllocationType::Realloc,
+        AllocationType::ReallocArray,
+        AllocationType::AlignedAlloc,
+        AllocationType::Memalign,
+        AllocationType::PosixMemalign,
+        AllocationType::Valloc,
+        AllocationType::PValloc};
     constexpr std::array deallocationDisplayTypes = {
-        AllocationOperationType::Free,
-        AllocationOperationType::Realloc,
-        AllocationOperationType::ReallocArray,
-        AllocationOperationType::CFree};
+        AllocationType::Free,
+        AllocationType::Realloc,
+        AllocationType::ReallocArray,
+        AllocationType::CFree};
     constexpr int baseRowCount = 10;
     const int rowCount = baseRowCount +
                          static_cast<int>(allocationDisplayTypes.size()) +
@@ -1692,7 +1692,7 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
     SetTableRow(mOverviewTable, row++, tr("Address Range"), QString::fromStdString(BuildHexValueText(addressRange, summary.mAddressRange.mHasAllocations)), true);
     SetTableRow(mOverviewTable, row++, tr("Tracked Allocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedAllocations)));
 
-    for (AllocationOperationType type : allocationDisplayTypes)
+    for (AllocationType type : allocationDisplayTypes)
     {
         const unsigned long long operationCount = summary.mTrackedAllocationsByType[OperationTypeIndex(type)];
         SetTableRow(
@@ -1706,7 +1706,7 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 
     SetTableRow(mOverviewTable, row++, tr("Tracked Deallocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedDeallocations)));
 
-    for (AllocationOperationType type : deallocationDisplayTypes)
+    for (AllocationType type : deallocationDisplayTypes)
     {
         const unsigned long long operationCount = summary.mTrackedDeallocationsByType[OperationTypeIndex(type)];
         SetTableRow(
