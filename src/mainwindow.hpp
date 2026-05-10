@@ -78,6 +78,8 @@ private:
         std::vector<StreamedAllocation> mAllocations;
         std::size_t mAllocationCount = 0;
         std::size_t mAllocationBytes = 0;
+        std::size_t mPageSize = 4096;
+        bool mHasPageSize = false;
         std::uint64_t mTrackedAllocations = 0;
         std::uint64_t mTrackedDeallocations = 0;
         std::uint64_t mUntrackedAllocations = 0;
@@ -101,6 +103,9 @@ private:
         std::size_t mStreamPayloadSize = 0;
         std::size_t mAllocationCount = 0;
         std::size_t mAllocationBytes = 0;
+        std::size_t mPageSize = 4096;
+        bool mHasPageSize = false;
+        std::size_t mAllocatedPages = 0;
         StreamedAddressRange mAddressRange;
         std::uint64_t mTrackedAllocations = 0;
         std::uint64_t mTrackedDeallocations = 0;

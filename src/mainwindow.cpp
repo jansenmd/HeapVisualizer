@@ -70,6 +70,7 @@ constexpr NativeSocket InvalidSocket = -1;
 
 constexpr char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
 constexpr char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
+constexpr std::size_t DefaultAllocationPageSize = 4096;
 constexpr std::size_t AllocationTypeCount =
     static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count);
 
@@ -673,6 +674,19 @@ int HexDigitCount(std::uintptr_t value)
         digitCount++;
     }
     return digitCount;
+}
+
+
+//------------------------------------------------------------------------------
+// BuildPercentageText
+//------------------------------------------------------------------------------
+//  Build display text for a ratio as a percentage.
+//------------------------------------------------------------------------------
+std::string BuildPercentageText(double ratio)
+{
+    std::ostringstream output;
+    output << std::fixed << std::setprecision(2) << (ratio * 100.0) << "%";
+    return output.str();
 }
 
 
@@ -1307,6 +1321,7 @@ void MainWindow::ParseStreamingData(const std::string& data)
 
     std::uint64_t allocationCount = 0;
     std::uint64_t allocationBytes = 0;
+    std::uint64_t pageSize = 0;
     std::uint64_t trackedAllocations = 0;
     std::uint64_t trackedDeallocations = 0;
     std::uint64_t untrackedAllocations = 0;
@@ -1314,6 +1329,7 @@ void MainWindow::ParseStreamingData(const std::string& data)
 
     if ((!ReadUInt64(data, offset, allocationCount)) ||
         (!ReadUInt64(data, offset, allocationBytes)) ||
+        (!ReadUInt64(data, offset, pageSize)) ||
         (!ReadUInt64(data, offset, trackedAllocations)) ||
         (!ReadUInt64(data, offset, trackedDeallocations)) ||
         (!ReadUInt64(data, offset, untrackedAllocations)) ||
@@ -1324,6 +1340,10 @@ void MainWindow::ParseStreamingData(const std::string& data)
 
     snapshot.mAllocationCount = static_cast<std::size_t>(allocationCount);
     snapshot.mAllocationBytes = static_cast<std::size_t>(allocationBytes);
+    snapshot.mHasPageSize = pageSize > 0;
+    snapshot.mPageSize = (pageSize > 0)
+                             ? static_cast<std::size_t>(pageSize)
+                             : DefaultAllocationPageSize;
     snapshot.mTrackedAllocations = static_cast<std::uint64_t>(trackedAllocations);
     snapshot.mTrackedDeallocations = static_cast<std::uint64_t>(trackedDeallocations);
     snapshot.mUntrackedAllocations = static_cast<std::uint64_t>(untrackedAllocations);
@@ -1501,8 +1521,12 @@ void MainWindow::AddAllocationToBin(std::vector<StreamedAllocationBin>& bins,
 MainWindow::StreamedAllocationSummary MainWindow::BuildAllocationSummary(const StreamedHeapSnapshot& snapshot) const
 {
     StreamedAllocationSummary summary;
+    std::vector<std::pair<std::uintptr_t, std::uintptr_t>> allocatedPageRanges;
+
     summary.mAllocationCount = snapshot.mAllocationCount;
     summary.mAllocationBytes = snapshot.mAllocationBytes;
+    summary.mPageSize = snapshot.mPageSize;
+    summary.mHasPageSize = snapshot.mHasPageSize;
     summary.mTrackedAllocations = snapshot.mTrackedAllocations;
     summary.mTrackedDeallocations = snapshot.mTrackedDeallocations;
     summary.mUntrackedAllocations = snapshot.mUntrackedAllocations;
@@ -1518,8 +1542,44 @@ MainWindow::StreamedAllocationSummary MainWindow::BuildAllocationSummary(const S
             summary.mAllocationBytes += allocation.mSize;
         }
 
+        if (allocation.mSize > 0)
+        {
+            const std::uintptr_t maximumAddress = std::numeric_limits<std::uintptr_t>::max();
+            const std::uintptr_t pageSize = static_cast<std::uintptr_t>(summary.mPageSize);
+            const std::uintptr_t allocationEndAddress =
+                (allocation.mSize - 1 <= maximumAddress - allocation.mAddress)
+                    ? allocation.mAddress + allocation.mSize - 1
+                    : maximumAddress;
+            allocatedPageRanges.emplace_back(
+                allocation.mAddress / pageSize,
+                allocationEndAddress / pageSize);
+        }
+
         UpdateAddressRange(summary.mAddressRange, allocation);
         AddAllocationToBin(summary.mBins, allocation);
+    }
+
+    std::sort(allocatedPageRanges.begin(), allocatedPageRanges.end());
+
+    bool hasMergedPageRange = false;
+    std::uintptr_t mergedPageRangeEnd = 0;
+
+    for (const auto& pageRange : allocatedPageRanges)
+    {
+        if ((!hasMergedPageRange) ||
+            (pageRange.first > mergedPageRangeEnd))
+        {
+            hasMergedPageRange = true;
+            mergedPageRangeEnd = pageRange.second;
+            summary.mAllocatedPages += static_cast<std::size_t>(pageRange.second - pageRange.first + 1);
+            continue;
+        }
+
+        if (pageRange.second > mergedPageRangeEnd)
+        {
+            summary.mAllocatedPages += static_cast<std::size_t>(pageRange.second - mergedPageRangeEnd);
+            mergedPageRangeEnd = pageRange.second;
+        }
     }
 
     return summary;
@@ -1663,7 +1723,7 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
         AllocationType::Realloc,
         AllocationType::ReallocArray,
         AllocationType::CFree};
-    constexpr int baseRowCount = 10;
+    constexpr int baseRowCount = 12;
     const int rowCount = baseRowCount +
                          static_cast<int>(allocationDisplayTypes.size()) +
                          static_cast<int>(deallocationDisplayTypes.size());
@@ -1677,6 +1737,14 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
     const std::size_t addressRange = summary.mAddressRange.mHasAllocations
                                          ? static_cast<std::size_t>(rangeEnd - rangeStart)
                                          : 0;
+    const QString pageSizeText = summary.mHasPageSize
+                                     ? QString::fromStdString(BuildByteTickLabel(summary.mPageSize))
+                                     : QStringLiteral("?");
+    const double pageEfficiency = (summary.mAllocatedPages > 0)
+                                      ? static_cast<double>(summary.mAllocationBytes) /
+                                            (static_cast<double>(summary.mAllocatedPages) *
+                                             static_cast<double>(summary.mPageSize))
+                                      : 0.0;
 
     int row = 0;
     SetTableRow(
@@ -1688,6 +1756,18 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
     SetTableRow(mOverviewTable, row++, tr("Address Start"), QString::fromStdString(BuildAddressText(rangeStart, summary.mAddressRange.mHasAllocations, addressDigitCount)), true);
     SetTableRow(mOverviewTable, row++, tr("Address End"), QString::fromStdString(BuildAddressText(rangeEnd, summary.mAddressRange.mHasAllocations, addressDigitCount)), true);
     SetTableRow(mOverviewTable, row++, tr("Address Range"), QString::fromStdString(BuildHexValueText(addressRange, summary.mAddressRange.mHasAllocations)), true);
+    SetTableRow(
+        mOverviewTable,
+        row++,
+        tr("Allocated Pages [%1]").arg(pageSizeText),
+        QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mAllocatedPages)));
+    SetTableRow(
+        mOverviewTable,
+        row++,
+        QStringLiteral("    ") + tr("Page Efficiency"),
+        QString::fromStdString(BuildPercentageText(pageEfficiency)),
+        false,
+        summary.mAllocatedPages == 0);
     SetTableRow(mOverviewTable, row++, tr("Tracked Allocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedAllocations)));
 
     for (AllocationType type : allocationDisplayTypes)

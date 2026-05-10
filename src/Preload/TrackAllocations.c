@@ -38,14 +38,17 @@ typedef struct AllocationPool
 static const char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
 static const char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
 static const long StreamingIntervalNanoseconds = 100000000;
+static const uint64_t DefaultSystemPageSize = 4096;
 static void* const TombstoneAddress = (void*)(uintptr_t)1;
 
 static pthread_mutex_t gStreamingWaitMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t gStreamingThread;
+static uint64_t gSystemPageSize = DefaultSystemPageSize;
 
 // Track up to 1 million allocations
 #define NUM_ALLOCATION_RECORDS      0x100000
 #define SNAPSHOT_POOL_COUNTER_COUNT 6                   // AllocationPool number of counters
+#define SNAPSHOT_PAGE_SIZE_BYTES    sizeof(uint64_t)    // Additional page size size
 #define SNAPSHOT_COUNTER_BYTES      sizeof(uint64_t)    // AllocationPool count member sizes
 #define SNAPSHOT_ADDRESS_BYTES      sizeof(uint64_t)    // AllocationRecord.mAddress, converted to uint64_t when serialized
 #define SNAPSHOT_SIZE_BYTES         sizeof(size_t)      // AllocationRecord.mSize
@@ -68,6 +71,7 @@ static AllocationPool gAllocationPool = {
 static uint8_t gSnapshotSendBuffer[
     sizeof(SnapshotMagic) +                                         // header
     (SNAPSHOT_POOL_COUNTER_COUNT * SNAPSHOT_COUNTER_BYTES) +        // counters
+    (SNAPSHOT_PAGE_SIZE_BYTES) +                                    // page size
     (AllocationType_Count * SNAPSHOT_COUNTER_BYTES) +               // allocations by type
     (AllocationType_Count * SNAPSHOT_COUNTER_BYTES) +               // deallocations by type
     (NUM_ALLOCATION_RECORDS * SNAPSHOT_ALLOCATION_RECORD_BYTES) +   // allocation records
@@ -131,6 +135,22 @@ static int ReadEnvironmentInt(const char* variableName, int fallbackValue)
     }
 
     return (int)parsedValue;
+}
+
+
+//------------------------------------------------------------------------------
+// ReadSystemPageSize
+//------------------------------------------------------------------------------
+//  Read the operating system memory page size.
+//------------------------------------------------------------------------------
+static uint64_t ReadSystemPageSize(void)
+{
+    const long pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize <= 0)
+    {
+        return DefaultSystemPageSize;
+    }
+    return (uint64_t)pageSize;
 }
 
 
@@ -263,6 +283,7 @@ static bool SendSerializedAllocations(int fd)
     bool serialized =   AppendBytes(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, SnapshotMagic, sizeof(SnapshotMagic)) &&
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mAllocationCount) &&
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mAllocationBytes) &&
+                        AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gSystemPageSize) &&
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mTrackedAllocations) &&
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mTrackedDeallocations) &&
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mUntrackedAllocations) &&
@@ -601,6 +622,7 @@ void UntrackAllocation(void* pointer, AllocationType type)
 //------------------------------------------------------------------------------
 __attribute__((constructor)) static void OnLibraryLoaded(void)
 {
+    gSystemPageSize = ReadSystemPageSize();
     StartStreamingThread();
 }
 
