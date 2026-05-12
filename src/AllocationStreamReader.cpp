@@ -15,7 +15,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
-#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -197,6 +196,26 @@ void CloseSocket(NativeSocket socketValue)
 
 
 //------------------------------------------------------------------------------
+// ShutdownSocket
+//------------------------------------------------------------------------------
+//  Shut down socket operations to wake blocking accept or receive calls.
+//------------------------------------------------------------------------------
+void ShutdownSocket(NativeSocket socketValue)
+{
+    if (socketValue == InvalidSocket)
+    {
+        return;
+    }
+
+#ifdef _WIN32
+    shutdown(socketValue, SD_BOTH);
+#else
+    shutdown(socketValue, SHUT_RDWR);
+#endif
+}
+
+
+//------------------------------------------------------------------------------
 // CreateListenSocket
 //------------------------------------------------------------------------------
 //  Create, bind, and listen on a native TCP socket.
@@ -248,66 +267,18 @@ NativeSocket CreateListenSocket(const std::string& addressText, std::uint16_t po
 
 
 //------------------------------------------------------------------------------
-// WaitForConnection
-//------------------------------------------------------------------------------
-//  Wait briefly for a listener socket to become readable.
-//------------------------------------------------------------------------------
-bool WaitForConnection(NativeSocket listenSocket)
-{
-#ifdef _WIN32
-    fd_set readSet;
-    FD_ZERO(&readSet);
-    FD_SET(listenSocket, &readSet);
-
-    timeval timeout = {};
-    timeout.tv_usec = 200000;
-    return select(0, &readSet, nullptr, nullptr, &timeout) > 0;
-#else
-    pollfd descriptor = {};
-    descriptor.fd = listenSocket;
-    descriptor.events = POLLIN;
-    return poll(&descriptor, 1, 200) > 0 && (descriptor.revents & POLLIN) != 0;
-#endif
-}
-
-
-//------------------------------------------------------------------------------
-// WaitForSocketData
-//------------------------------------------------------------------------------
-//  Wait briefly for a connected socket to become readable.
-//------------------------------------------------------------------------------
-bool WaitForSocketData(NativeSocket socketValue)
-{
-#ifdef _WIN32
-    fd_set readSet;
-    FD_ZERO(&readSet);
-    FD_SET(socketValue, &readSet);
-
-    timeval timeout = {};
-    timeout.tv_usec = 200000;
-    return select(0, &readSet, nullptr, nullptr, &timeout) > 0;
-#else
-    pollfd descriptor = {};
-    descriptor.fd = socketValue;
-    descriptor.events = POLLIN;
-    return poll(&descriptor, 1, 200) > 0 && (descriptor.revents & POLLIN) != 0;
-#endif
-}
-
-
-//------------------------------------------------------------------------------
 // ReceiveSocketFrame
 //------------------------------------------------------------------------------
 //  Read one complete header/footer-delimited frame from a socket.
+//  Returns false if the socket fails to read.
 //------------------------------------------------------------------------------
 bool ReceiveSocketFrame(NativeSocket socketValue,
                         std::string& bufferedData,
-                        std::string& frameData,
-                        const std::atomic_bool& streamingActive)
+                        std::string& frameData)
 {
     std::array<char, 8192> buffer = {};
 
-    while (streamingActive.load(std::memory_order_acquire))
+    while (true)
     {
         const std::size_t headerOffset = bufferedData.find(SnapshotMagic, 0, sizeof(SnapshotMagic));
         if (headerOffset != std::string::npos)
@@ -334,11 +305,6 @@ bool ReceiveSocketFrame(NativeSocket socketValue,
             bufferedData.erase(0, bufferedData.size() - sizeof(SnapshotMagic) + 1);
         }
 
-        if (!WaitForSocketData(socketValue))
-        {
-            continue;
-        }
-
 #ifdef _WIN32
         const int bytesRead = recv(socketValue, buffer.data(), static_cast<int>(buffer.size()), 0);
 #else
@@ -351,8 +317,6 @@ bool ReceiveSocketFrame(NativeSocket socketValue,
 
         bufferedData.append(buffer.data(), static_cast<std::size_t>(bytesRead));
     }
-
-    return false;
 }
 
 }
@@ -418,7 +382,8 @@ bool AllocationStreamReader::Start(const std::string& address, std::uint16_t por
         ShutdownSockets();
         return false;
     }
-    mStreamingListenSocket = FromNativeSocket(listenSocket);
+    mStreamingListenSocket.store(FromNativeSocket(listenSocket), std::memory_order_release);
+    mStreamingClientSocket.store(FromNativeSocket(InvalidSocket), std::memory_order_release);
 
     // Record that we're now streaming.
     mStreamingActive.store(true, std::memory_order_release);
@@ -440,16 +405,22 @@ bool AllocationStreamReader::Start(const std::string& address, std::uint16_t por
 //------------------------------------------------------------------------------
 void AllocationStreamReader::Stop()
 {
-    // Indicate that the thread is about to be stopped.
+    // Indicate that the thread is stopping/stopped.
     // Immediately return if it was already stopped.
     if (!mStreamingActive.exchange(false, std::memory_order_acq_rel))
     {
         return;
     }
 
-    // Close the listening socket.
-    CloseSocket(ToNativeSocket(mStreamingListenSocket));
-    mStreamingListenSocket = 0;
+    // Close the listening socket first so the reader cannot accept a new client
+    // after the current client socket is interrupted.
+    const NativeSocket listenSocket = ToNativeSocket(mStreamingListenSocket.exchange(FromNativeSocket(InvalidSocket), std::memory_order_acq_rel));
+    ShutdownSocket(listenSocket);
+    CloseSocket(listenSocket);
+
+    const NativeSocket clientSocket = ToNativeSocket(mStreamingClientSocket.exchange(FromNativeSocket(InvalidSocket), std::memory_order_acq_rel));
+    ShutdownSocket(clientSocket);
+    CloseSocket(clientSocket);
 
     // Wait for the thread to join.
     if (mStreamingThread.joinable())
@@ -481,24 +452,30 @@ bool AllocationStreamReader::IsActive() const
 void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValue)
 {
     const NativeSocket listenSocket = ToNativeSocket(listenSocketValue);
+
+    // Check to see if it's time to stop.
     while (mStreamingActive.load(std::memory_order_acquire))
     {
-        if (!WaitForConnection(listenSocket))
-        {
-            continue;
-        }
-
+        // Wait for new connections.
         const NativeSocket clientSocket = accept(listenSocket, nullptr, nullptr);
         if (clientSocket == InvalidSocket)
         {
+            // When stopping, mStreamingActive will be set to false and the
+            // listen socket will get shut down.
             continue;
         }
 
+        // Store the new socket so we can stop it by shutting down this socket.
+        mStreamingClientSocket.store(FromNativeSocket(clientSocket), std::memory_order_release);
         std::string bufferedData;
-        while (mStreamingActive.load(std::memory_order_acquire))
+        // Read data until the socket fails to read (either due to an error,
+        // the client disconnecting, or the thread stopping and the socket
+        // being shut down).
+        while (true)
         {
             std::string frameData;
-            if (!ReceiveSocketFrame(clientSocket, bufferedData, frameData, mStreamingActive))
+            // Returns false if the socket cannot be read from.
+            if (!ReceiveSocketFrame(clientSocket, bufferedData, frameData))
             {
                 break;
             }
@@ -509,7 +486,12 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
             }
         }
 
-        CloseSocket(clientSocket);
+        const NativeSocket storedClientSocket = ToNativeSocket(
+            mStreamingClientSocket.exchange(FromNativeSocket(InvalidSocket), std::memory_order_acq_rel));
+        if (storedClientSocket != InvalidSocket)
+        {
+            CloseSocket(storedClientSocket);
+        }
     }
 }
 

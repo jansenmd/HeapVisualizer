@@ -112,7 +112,8 @@ private:
 
     SummaryHandler mSummaryHandler;
     std::atomic_bool mStreamingActive = false;
-    std::uintptr_t mStreamingListenSocket = 0;
+    std::atomic_uintptr_t mStreamingListenSocket = static_cast<std::uintptr_t>(-1);
+    std::atomic_uintptr_t mStreamingClientSocket = static_cast<std::uintptr_t>(-1);
     std::thread mStreamingThread;
     std::mutex mStreamedSnapshotsMutex;
     std::vector<StreamedHeapSnapshot> mStreamedSnapshots;
