@@ -106,6 +106,9 @@ public:
 
 private:
     void StreamingThreadMain(std::uintptr_t listenSocket);
+    bool ReceiveSocketFrame(std::uintptr_t clientSocket,
+                            std::vector<std::uint8_t>& bufferedData,
+                            std::size_t& bufferedDataSize);
     void ParseStreamingData(std::span<const std::uint8_t> data);
     void UpdateAddressRange(StreamedAddressRange& range, const StreamedAllocation& allocation) const;
     void AddAllocationToBin(std::vector<StreamedAllocationBin>& bins, const StreamedAllocation& allocation) const;

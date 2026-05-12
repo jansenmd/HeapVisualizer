@@ -323,74 +323,6 @@ NativeSocket CreateListenSocket(const std::string& addressText, std::uint16_t po
 }
 
 
-//------------------------------------------------------------------------------
-// ReceiveSocketFrame
-//------------------------------------------------------------------------------
-//  Read one complete header/footer-delimited frame from a socket.
-//  Returns false if the socket fails to read.
-//------------------------------------------------------------------------------
-bool ReceiveSocketFrame(NativeSocket socketValue,
-                        std::vector<std::uint8_t>& bufferedData,
-                        std::size_t& bufferedDataSize,
-                        std::size_t& frameSize)
-{
-    frameSize = 0;
-
-    while (true)
-    {
-        const std::size_t headerOffset = FindBytePattern(bufferedData, bufferedDataSize, SnapshotMagic, 0);
-        if (headerOffset != BytePatternNotFound)
-        {
-            if (headerOffset != 0)
-            {
-                ConsumeBufferedData(bufferedData, bufferedDataSize, headerOffset);
-            }
-
-            const std::size_t footerOffset = FindBytePattern(
-                bufferedData,
-                bufferedDataSize,
-                SnapshotFooter,
-                SnapshotMagic.size());
-            if (footerOffset != BytePatternNotFound)
-            {
-                frameSize = footerOffset + SnapshotFooter.size();
-                return true;
-            }
-        }
-        else if (bufferedDataSize > SnapshotMagic.size())
-        {
-            const std::size_t bytesToKeep = SnapshotMagic.size() - 1;
-            std::move(
-                bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize - bytesToKeep),
-                bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize),
-                bufferedData.begin());
-            bufferedDataSize = bytesToKeep;
-        }
-
-        if ((bufferedData.size() - bufferedDataSize) < SocketReadChunkSize)
-        {
-            bufferedData.resize(bufferedDataSize + SocketReadChunkSize);
-        }
-
-#ifdef _WIN32
-        const int bytesRead = recv(
-            socketValue,
-            reinterpret_cast<char*>(bufferedData.data() + bufferedDataSize),
-            static_cast<int>(SocketReadChunkSize),
-            0);
-#else
-        const ssize_t bytesRead = recv(socketValue, bufferedData.data() + bufferedDataSize, SocketReadChunkSize, 0);
-#endif
-        // Something is wrong with the socket, time to return.
-        if (bytesRead <= 0)
-        {
-            return false;
-        }
-
-        bufferedDataSize += static_cast<std::size_t>(bytesRead);
-    }
-}
-
 }
 
 
@@ -517,6 +449,76 @@ bool AllocationStreamReader::IsActive() const
 
 
 //------------------------------------------------------------------------------
+// ReceiveSocketFrame
+//------------------------------------------------------------------------------
+//  Read and parse one complete header/footer-delimited frame from a socket.
+//  Returns false if the socket fails to read.
+//------------------------------------------------------------------------------
+bool AllocationStreamReader::ReceiveSocketFrame(std::uintptr_t clientSocketValue,
+                                                std::vector<std::uint8_t>& bufferedData,
+                                                std::size_t& bufferedDataSize)
+{
+    const NativeSocket clientSocket = ToNativeSocket(clientSocketValue);
+
+    while (true)
+    {
+        const std::size_t headerOffset = FindBytePattern(bufferedData, bufferedDataSize, SnapshotMagic, 0);
+        if (headerOffset != BytePatternNotFound)
+        {
+            if (headerOffset != 0)
+            {
+                ConsumeBufferedData(bufferedData, bufferedDataSize, headerOffset);
+            }
+
+            const std::size_t footerOffset = FindBytePattern(
+                bufferedData,
+                bufferedDataSize,
+                SnapshotFooter,
+                SnapshotMagic.size());
+            if (footerOffset != BytePatternNotFound)
+            {
+                const std::size_t frameSize = footerOffset + SnapshotFooter.size();
+                ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), frameSize));
+                ConsumeBufferedData(bufferedData, bufferedDataSize, frameSize);
+                return true;
+            }
+        }
+        else if (bufferedDataSize > SnapshotMagic.size())
+        {
+            const std::size_t bytesToKeep = SnapshotMagic.size() - 1;
+            std::move(
+                bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize - bytesToKeep),
+                bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize),
+                bufferedData.begin());
+            bufferedDataSize = bytesToKeep;
+        }
+
+        if ((bufferedData.size() - bufferedDataSize) < SocketReadChunkSize)
+        {
+            bufferedData.resize(bufferedDataSize + SocketReadChunkSize);
+        }
+
+#ifdef _WIN32
+        const int bytesRead = recv(
+            clientSocket,
+            reinterpret_cast<char*>(bufferedData.data() + bufferedDataSize),
+            static_cast<int>(SocketReadChunkSize),
+            0);
+#else
+        const ssize_t bytesRead = recv(clientSocket, bufferedData.data() + bufferedDataSize, SocketReadChunkSize, 0);
+#endif
+        // Something is wrong with the socket, time to return.
+        if (bytesRead <= 0)
+        {
+            return false;
+        }
+
+        bufferedDataSize += static_cast<std::size_t>(bytesRead);
+    }
+}
+
+
+//------------------------------------------------------------------------------
 // StreamingThreadMain
 //------------------------------------------------------------------------------
 //  Accept native socket connections and parse streamed allocation frames.
@@ -546,17 +548,10 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
         // being shut down).
         while (true)
         {
-            std::size_t frameSize = 0;
             // Returns false if the socket cannot be read from.
-            if (!ReceiveSocketFrame(clientSocket, bufferedData, bufferedDataSize, frameSize))
+            if (!ReceiveSocketFrame(FromNativeSocket(clientSocket), bufferedData, bufferedDataSize))
             {
                 break;
-            }
-
-            if (frameSize > 0)
-            {
-                ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), frameSize));
-                ConsumeBufferedData(bufferedData, bufferedDataSize, frameSize);
             }
         }
 
