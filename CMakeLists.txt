@@ -89,6 +89,7 @@ configure_file(
 )
 
 set(app_sources
+    src/AllocationStreamReader.cpp
     src/appstyle.cpp
     src/main.cpp
     src/mainwindow.cpp
@@ -101,6 +102,7 @@ set(test_app_sources
 )
 
 set(app_headers
+    src/AllocationStreamReader.hpp
     src/appstyle.hpp
     src/mainwindow.hpp
 )
