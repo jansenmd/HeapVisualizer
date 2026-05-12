@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <span>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -30,9 +33,11 @@ using NativeSocket = int;
 constexpr NativeSocket InvalidSocket = -1;
 #endif
 
-constexpr char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
-constexpr char SnapshotFooter[] = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
+constexpr std::array<std::uint8_t, 8> SnapshotMagic = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
+constexpr std::array<std::uint8_t, 8> SnapshotFooter = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
+constexpr std::size_t SocketReadChunkSize = 8192;
 constexpr std::size_t DefaultAllocationPageSize = 4096;
+constexpr std::size_t BytePatternNotFound = std::numeric_limits<std::size_t>::max();
 constexpr std::size_t AllocationTypeCount =
     static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count);
 
@@ -56,6 +61,58 @@ std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType t
 bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type)
 {
     return OperationTypeIndex(type) < AllocationTypeCount;
+}
+
+
+//------------------------------------------------------------------------------
+// FindBytePattern
+//------------------------------------------------------------------------------
+//  Find a byte pattern in a byte buffer starting at the provided offset.
+//------------------------------------------------------------------------------
+std::size_t FindBytePattern(const std::vector<std::uint8_t>& data,
+                            std::size_t validSize,
+                            const std::array<std::uint8_t, 8>& pattern,
+                            std::size_t offset)
+{
+    if ((validSize > data.size()) ||
+        (offset > validSize) ||
+        (pattern.size() > (validSize - offset)))
+    {
+        return BytePatternNotFound;
+    }
+
+    const auto searchBegin = data.begin() + static_cast<std::ptrdiff_t>(offset);
+    const auto searchEnd = data.begin() + static_cast<std::ptrdiff_t>(validSize);
+    const auto patternIterator = std::search(searchBegin, searchEnd, pattern.begin(), pattern.end());
+    if (patternIterator == searchEnd)
+    {
+        return BytePatternNotFound;
+    }
+
+    return static_cast<std::size_t>(std::distance(data.begin(), patternIterator));
+}
+
+
+//------------------------------------------------------------------------------
+// ConsumeBufferedData
+//------------------------------------------------------------------------------
+//  Remove consumed bytes from the front of the valid buffered data range.
+//------------------------------------------------------------------------------
+void ConsumeBufferedData(std::vector<std::uint8_t>& bufferedData,
+                         std::size_t& bufferedDataSize,
+                         std::size_t bytesToConsume)
+{
+    if (bytesToConsume >= bufferedDataSize)
+    {
+        bufferedDataSize = 0;
+        return;
+    }
+
+    std::move(
+        bufferedData.begin() + static_cast<std::ptrdiff_t>(bytesToConsume),
+        bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize),
+        bufferedData.begin());
+    bufferedDataSize -= bytesToConsume;
 }
 
 
@@ -86,17 +143,17 @@ std::uintptr_t FromNativeSocket(NativeSocket socketValue)
 //------------------------------------------------------------------------------
 //  Read a 32-bit little-endian unsigned integer from a binary buffer.
 //------------------------------------------------------------------------------
-bool ReadUInt32(const std::string& data, std::size_t& offset, std::uint32_t& value)
+bool ReadUInt32(std::span<const std::uint8_t> data, std::size_t& offset, std::uint32_t& value)
 {
     if ((offset > data.size()) || ((data.size() - offset) < sizeof(std::uint32_t)))
     {
         return false;
     }
 
-    value = (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 0])) <<  0) |
-            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 1])) <<  8) |
-            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 2])) << 16) |
-            (static_cast<std::uint32_t>(static_cast<unsigned char>(data[offset + 3])) << 24);
+    value = (static_cast<std::uint32_t>(data[offset + 0]) <<  0) |
+            (static_cast<std::uint32_t>(data[offset + 1]) <<  8) |
+            (static_cast<std::uint32_t>(data[offset + 2]) << 16) |
+            (static_cast<std::uint32_t>(data[offset + 3]) << 24);
     offset += sizeof(std::uint32_t);
     return true;
 }
@@ -107,7 +164,7 @@ bool ReadUInt32(const std::string& data, std::size_t& offset, std::uint32_t& val
 //------------------------------------------------------------------------------
 //  Read a 64-bit little-endian unsigned integer from a binary buffer.
 //------------------------------------------------------------------------------
-bool ReadUInt64(const std::string& data, std::size_t& offset, std::uint64_t& value)
+bool ReadUInt64(std::span<const std::uint8_t> data, std::size_t& offset, std::uint64_t& value)
 {
     if ((offset > data.size()) || ((data.size() - offset) < sizeof(std::uint64_t)))
     {
@@ -117,7 +174,7 @@ bool ReadUInt64(const std::string& data, std::size_t& offset, std::uint64_t& val
     value = 0;
     for (std::size_t byteIndex = 0; byteIndex < sizeof(std::uint64_t); byteIndex++)
     {
-        value |= static_cast<std::uint64_t>(static_cast<uint8_t>(data[offset + byteIndex])) << (byteIndex * 8);
+        value |= static_cast<std::uint64_t>(data[offset + byteIndex]) << (byteIndex * 8);
     }
 
     offset += sizeof(std::uint64_t);
@@ -273,49 +330,64 @@ NativeSocket CreateListenSocket(const std::string& addressText, std::uint16_t po
 //  Returns false if the socket fails to read.
 //------------------------------------------------------------------------------
 bool ReceiveSocketFrame(NativeSocket socketValue,
-                        std::string& bufferedData,
-                        std::string& frameData)
+                        std::vector<std::uint8_t>& bufferedData,
+                        std::size_t& bufferedDataSize,
+                        std::size_t& frameSize)
 {
-    std::array<char, 8192> buffer = {};
+    frameSize = 0;
 
     while (true)
     {
-        const std::size_t headerOffset = bufferedData.find(SnapshotMagic, 0, sizeof(SnapshotMagic));
-        if (headerOffset != std::string::npos)
+        const std::size_t headerOffset = FindBytePattern(bufferedData, bufferedDataSize, SnapshotMagic, 0);
+        if (headerOffset != BytePatternNotFound)
         {
             if (headerOffset != 0)
             {
-                bufferedData.erase(0, headerOffset);
+                ConsumeBufferedData(bufferedData, bufferedDataSize, headerOffset);
             }
 
-            const std::size_t footerOffset = bufferedData.find(
+            const std::size_t footerOffset = FindBytePattern(
+                bufferedData,
+                bufferedDataSize,
                 SnapshotFooter,
-                sizeof(SnapshotMagic),
-                sizeof(SnapshotFooter));
-            if (footerOffset != std::string::npos)
+                SnapshotMagic.size());
+            if (footerOffset != BytePatternNotFound)
             {
-                const std::size_t frameEndOffset = footerOffset + sizeof(SnapshotFooter);
-                frameData = bufferedData.substr(0, frameEndOffset);
-                bufferedData.erase(0, frameEndOffset);
+                frameSize = footerOffset + SnapshotFooter.size();
                 return true;
             }
         }
-        else if (bufferedData.size() > sizeof(SnapshotMagic))
+        else if (bufferedDataSize > SnapshotMagic.size())
         {
-            bufferedData.erase(0, bufferedData.size() - sizeof(SnapshotMagic) + 1);
+            const std::size_t bytesToKeep = SnapshotMagic.size() - 1;
+            std::move(
+                bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize - bytesToKeep),
+                bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize),
+                bufferedData.begin());
+            bufferedDataSize = bytesToKeep;
+        }
+
+        if ((bufferedData.size() - bufferedDataSize) < SocketReadChunkSize)
+        {
+            bufferedData.resize(bufferedDataSize + SocketReadChunkSize);
         }
 
 #ifdef _WIN32
-        const int bytesRead = recv(socketValue, buffer.data(), static_cast<int>(buffer.size()), 0);
+        const int bytesRead = recv(
+            socketValue,
+            reinterpret_cast<char*>(bufferedData.data() + bufferedDataSize),
+            static_cast<int>(SocketReadChunkSize),
+            0);
 #else
-        const ssize_t bytesRead = recv(socketValue, buffer.data(), buffer.size(), 0);
+        const ssize_t bytesRead = recv(socketValue, bufferedData.data() + bufferedDataSize, SocketReadChunkSize, 0);
 #endif
+        // Something is wrong with the socket, time to return.
         if (bytesRead <= 0)
         {
             return false;
         }
 
-        bufferedData.append(buffer.data(), static_cast<std::size_t>(bytesRead));
+        bufferedDataSize += static_cast<std::size_t>(bytesRead);
     }
 }
 
@@ -467,22 +539,24 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
 
         // Store the new socket so we can stop it by shutting down this socket.
         mStreamingClientSocket.store(FromNativeSocket(clientSocket), std::memory_order_release);
-        std::string bufferedData;
+        std::vector<std::uint8_t> bufferedData;
+        std::size_t bufferedDataSize = 0;
         // Read data until the socket fails to read (either due to an error,
         // the client disconnecting, or the thread stopping and the socket
         // being shut down).
         while (true)
         {
-            std::string frameData;
+            std::size_t frameSize = 0;
             // Returns false if the socket cannot be read from.
-            if (!ReceiveSocketFrame(clientSocket, bufferedData, frameData))
+            if (!ReceiveSocketFrame(clientSocket, bufferedData, bufferedDataSize, frameSize))
             {
                 break;
             }
 
-            if (!frameData.empty())
+            if (frameSize > 0)
             {
-                ParseStreamingData(frameData);
+                ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), frameSize));
+                ConsumeBufferedData(bufferedData, bufferedDataSize, frameSize);
             }
         }
 
@@ -501,18 +575,18 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
 //------------------------------------------------------------------------------
 //  Parse streamed heap allocation data into internal snapshot structures.
 //------------------------------------------------------------------------------
-void AllocationStreamReader::ParseStreamingData(const std::string& data)
+void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> data)
 {
     StreamedHeapSnapshot snapshot;
     std::size_t offset = 0;
 
-    if ((data.size() < sizeof(SnapshotMagic)) ||
-        (std::memcmp(data.data(), SnapshotMagic, sizeof(SnapshotMagic)) != 0))
+    if ((data.size() < SnapshotMagic.size()) ||
+        (std::memcmp(data.data(), SnapshotMagic.data(), SnapshotMagic.size()) != 0))
     {
         return;
     }
 
-    offset += sizeof(SnapshotMagic);
+    offset += SnapshotMagic.size();
 
     std::uint64_t allocationCount = 0;
     std::uint64_t allocationBytes = 0;
@@ -588,8 +662,8 @@ void AllocationStreamReader::ParseStreamingData(const std::string& data)
         snapshot.mAllocations.push_back({static_cast<std::uintptr_t>(address), static_cast<std::size_t>(size), type});
     }
 
-    if ((data.size() - offset != sizeof(SnapshotFooter)) ||
-        (std::memcmp(data.data() + offset, SnapshotFooter, sizeof(SnapshotFooter)) != 0))
+    if ((data.size() - offset != SnapshotFooter.size()) ||
+        (std::memcmp(data.data() + offset, SnapshotFooter.data(), SnapshotFooter.size()) != 0))
     {
         return;
     }

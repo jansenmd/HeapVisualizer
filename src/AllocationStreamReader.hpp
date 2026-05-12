@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -105,7 +106,7 @@ public:
 
 private:
     void StreamingThreadMain(std::uintptr_t listenSocket);
-    void ParseStreamingData(const std::string& data);
+    void ParseStreamingData(std::span<const std::uint8_t> data);
     void UpdateAddressRange(StreamedAddressRange& range, const StreamedAllocation& allocation) const;
     void AddAllocationToBin(std::vector<StreamedAllocationBin>& bins, const StreamedAllocation& allocation) const;
     [[nodiscard]] StreamedAllocationSummary BuildAllocationSummary(const StreamedHeapSnapshot& snapshot) const;
