@@ -361,6 +361,18 @@ bool ReceiveSocketFrame(NativeSocket socketValue,
 //------------------------------------------------------------------------------
 // AllocationStreamReader
 //------------------------------------------------------------------------------
+//  AllocationStreamReader constructor.  Does nothing for now.
+//------------------------------------------------------------------------------
+AllocationStreamReader::AllocationStreamReader()
+{
+
+}
+
+
+//------------------------------------------------------------------------------
+// ~AllocationStreamReader
+//------------------------------------------------------------------------------
+//  AllocationStreamReader destructor.
 //  Stop background streaming before destroying the reader.
 //------------------------------------------------------------------------------
 AllocationStreamReader::~AllocationStreamReader()
@@ -387,25 +399,31 @@ void AllocationStreamReader::SetSummaryHandler(SummaryHandler handler)
 //------------------------------------------------------------------------------
 bool AllocationStreamReader::Start(const std::string& address, std::uint16_t port, std::string& errorMessage)
 {
+    // If we're already started, just return true.
     if (mStreamingActive.load(std::memory_order_acquire))
     {
         return true;
     }
 
+    // Initialize sockets (only matters on WIN32).
     if (!InitializeSockets(errorMessage))
     {
         return false;
     }
 
+    // Create the socket.
     const NativeSocket listenSocket = CreateListenSocket(address, port, errorMessage);
     if (listenSocket == InvalidSocket)
     {
         ShutdownSockets();
         return false;
     }
-
     mStreamingListenSocket = FromNativeSocket(listenSocket);
+
+    // Record that we're now streaming.
     mStreamingActive.store(true, std::memory_order_release);
+
+    // Create the thread to read from the socket and parse the data.
     mStreamingThread = std::thread([this, listenSocket]
     {
         StreamingThreadMain(FromNativeSocket(listenSocket));
@@ -422,19 +440,24 @@ bool AllocationStreamReader::Start(const std::string& address, std::uint16_t por
 //------------------------------------------------------------------------------
 void AllocationStreamReader::Stop()
 {
+    // Indicate that the thread is about to be stopped.
+    // Immediately return if it was already stopped.
     if (!mStreamingActive.exchange(false, std::memory_order_acq_rel))
     {
         return;
     }
 
+    // Close the listening socket.
     CloseSocket(ToNativeSocket(mStreamingListenSocket));
     mStreamingListenSocket = 0;
 
+    // Wait for the thread to join.
     if (mStreamingThread.joinable())
     {
         mStreamingThread.join();
     }
 
+    // WIN32 cleanup.
     ShutdownSockets();
 }
 

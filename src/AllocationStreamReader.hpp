@@ -88,7 +88,7 @@ public:
     using SummaryHandler = std::function<void(const StreamedAllocationSummary& summary)>;
 
     // Constructor and Destructor
-    AllocationStreamReader() = default;
+    AllocationStreamReader();
     ~AllocationStreamReader();
 
     // Disallow copying an instance of this class.
