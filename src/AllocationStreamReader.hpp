@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -11,6 +12,11 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+constexpr std::size_t StreamedTrackedAllocationTypeCount =
+    static_cast<std::size_t>(HeapVisualizer::AllocationHooks::TrackedAllocationType::Count);
+constexpr std::size_t StreamedTrackedDeallocationTypeCount =
+    static_cast<std::size_t>(HeapVisualizer::AllocationHooks::TrackedDeallocationType::Count);
 
 struct StreamedAllocationBin
 {
@@ -28,8 +34,8 @@ struct StreamedAllocation
 {
     std::uintptr_t mAddress = 0;
     std::size_t mSize = 0;
-    HeapVisualizer::AllocationHooks::AllocationType mType =
-        HeapVisualizer::AllocationHooks::AllocationType::Malloc;
+    HeapVisualizer::AllocationHooks::TrackedAllocationType mType =
+        HeapVisualizer::AllocationHooks::TrackedAllocationType::Malloc;
 };
 
 struct StreamedHeapSnapshot
@@ -43,9 +49,9 @@ struct StreamedHeapSnapshot
     std::uint64_t mTrackedDeallocations = 0;
     std::uint64_t mUntrackedAllocations = 0;
     std::uint64_t mUntrackedDeallocations = 0;
-    std::array<std::uint64_t, static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
+    std::array<std::uint64_t, StreamedTrackedAllocationTypeCount>
         mTrackedAllocationsByType = {};
-    std::array<std::uint64_t, static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
+    std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount>
         mTrackedDeallocationsByType = {};
 };
 
@@ -70,9 +76,9 @@ struct StreamedAllocationSummary
     std::uint64_t mTrackedDeallocations = 0;
     std::uint64_t mUntrackedAllocations = 0;
     std::uint64_t mUntrackedDeallocations = 0;
-    std::array<std::uint64_t, static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
+    std::array<std::uint64_t, StreamedTrackedAllocationTypeCount>
         mTrackedAllocationsByType = {};
-    std::array<std::uint64_t, static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count)>
+    std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount>
         mTrackedDeallocationsByType = {};
     std::vector<StreamedAllocationBin> mBins;
 };
@@ -105,8 +111,8 @@ public:
     bool IsActive() const;
 
 private:
-    [[nodiscard]] static std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType type);
-    [[nodiscard]] static bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type);
+    [[nodiscard]] static bool IsValidTrackedAllocationType(
+        HeapVisualizer::AllocationHooks::TrackedAllocationType type);
     static void ConsumeBufferedData(std::vector<std::uint8_t>& bufferedData,
                                     std::size_t& bufferedDataSize,
                                     std::size_t bytesToConsume);

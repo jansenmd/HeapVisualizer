@@ -7,19 +7,26 @@
 namespace HeapVisualizer::AllocationHooks
 {
 
-enum class AllocationType : std::uint32_t
+enum class TrackedAllocationType : std::uint32_t
 {
     Malloc = 0,
     Calloc,
     Realloc,
     ReallocArray,
-    Free,
-    CFree,
     PosixMemalign,
     AlignedAlloc,
     Memalign,
     Valloc,
     PValloc,
+    Count
+};
+
+enum class TrackedDeallocationType : std::uint32_t
+{
+    Free = 0,
+    Realloc,
+    ReallocArray,
+    CFree,
     Count
 };
 
@@ -30,23 +37,30 @@ enum class AllocationType : std::uint32_t
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum AllocationType
+typedef enum TrackedAllocationType
 {
-    AllocationType_Malloc = 0,
-    AllocationType_Calloc,
-    AllocationType_Realloc,
-    AllocationType_ReallocArray,
-    AllocationType_Free,
-    AllocationType_CFree,
-    AllocationType_PosixMemalign,
-    AllocationType_AlignedAlloc,
-    AllocationType_Memalign,
-    AllocationType_Valloc,
-    AllocationType_PValloc,
-    AllocationType_Count
-} AllocationType;
+    TrackedAllocationType_Malloc = 0,
+    TrackedAllocationType_Calloc,
+    TrackedAllocationType_Realloc,
+    TrackedAllocationType_ReallocArray,
+    TrackedAllocationType_PosixMemalign,
+    TrackedAllocationType_AlignedAlloc,
+    TrackedAllocationType_Memalign,
+    TrackedAllocationType_Valloc,
+    TrackedAllocationType_PValloc,
+    TrackedAllocationType_Count
+} TrackedAllocationType;
 
-void TrackAllocation(void* pointer, size_t size, AllocationType type);
-void UntrackAllocation(void* pointer, AllocationType type);
+typedef enum TrackedDeallocationType
+{
+    TrackedDeallocationType_Free = 0,
+    TrackedDeallocationType_Realloc,
+    TrackedDeallocationType_ReallocArray,
+    TrackedDeallocationType_CFree,
+    TrackedDeallocationType_Count
+} TrackedDeallocationType;
+
+void TrackAllocation(void* pointer, size_t size, TrackedAllocationType type);
+void UntrackAllocation(void* pointer, TrackedDeallocationType type);
 
 #endif

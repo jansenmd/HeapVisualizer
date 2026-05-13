@@ -41,32 +41,25 @@ constexpr std::size_t SnapshotLengthSize = sizeof(std::uint64_t);
 constexpr std::size_t MinimumSnapshotFrameSize =
     SnapshotMagic.size() + SnapshotLengthSize + SnapshotFooter.size();
 constexpr std::size_t BytePatternNotFound = std::numeric_limits<std::size_t>::max();
-constexpr std::size_t AllocationTypeCount =
-    static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count);
+constexpr std::size_t TrackedAllocationTypeCount =
+    static_cast<std::size_t>(HeapVisualizer::AllocationHooks::TrackedAllocationType::Count);
+static_assert(StreamedTrackedAllocationTypeCount == TrackedAllocationTypeCount);
+static_assert(StreamedTrackedDeallocationTypeCount ==
+    static_cast<std::size_t>(HeapVisualizer::AllocationHooks::TrackedDeallocationType::Count));
 
 
 }
 
 
 //------------------------------------------------------------------------------
-// OperationTypeIndex
+// IsValidTrackedAllocationType
 //------------------------------------------------------------------------------
-//  Convert an allocation operation type into a count-array index.
+//  Return whether a tracked allocation type is inside the known range.
 //------------------------------------------------------------------------------
-std::size_t AllocationStreamReader::OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType type)
+bool AllocationStreamReader::IsValidTrackedAllocationType(
+    HeapVisualizer::AllocationHooks::TrackedAllocationType type)
 {
-    return static_cast<std::size_t>(type);
-}
-
-
-//------------------------------------------------------------------------------
-// IsValidOperationType
-//------------------------------------------------------------------------------
-//  Return whether an allocation operation type is inside the known range.
-//------------------------------------------------------------------------------
-bool AllocationStreamReader::IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type)
-{
-    return OperationTypeIndex(type) < AllocationTypeCount;
+    return static_cast<std::size_t>(type) < TrackedAllocationTypeCount;
 }
 
 
@@ -597,7 +590,7 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
         snapshot.mPageSize = DefaultAllocationPageSize;
     }
 
-    for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; typeIndex++)
+    for (std::size_t typeIndex = 0; typeIndex < StreamedTrackedAllocationTypeCount; typeIndex++)
     {
         std::uint64_t typeCount = 0;
         if (!ReadUInt64(data, offset, typeCount))
@@ -607,7 +600,7 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
         snapshot.mTrackedAllocationsByType[typeIndex] = static_cast<std::uint64_t>(typeCount);
     }
 
-    for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; typeIndex++)
+    for (std::size_t typeIndex = 0; typeIndex < StreamedTrackedDeallocationTypeCount; typeIndex++)
     {
         std::uint64_t typeCount = 0;
         if (!ReadUInt64(data, offset, typeCount))
@@ -630,8 +623,8 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
             return;
         }
 
-        const auto type = static_cast<HeapVisualizer::AllocationHooks::AllocationType>(typeValue);
-        if (!IsValidOperationType(type))
+        const auto type = static_cast<HeapVisualizer::AllocationHooks::TrackedAllocationType>(typeValue);
+        if (!IsValidTrackedAllocationType(type))
         {
             return;
         }

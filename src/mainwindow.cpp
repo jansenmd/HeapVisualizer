@@ -46,55 +46,90 @@ namespace
 {
 
 //------------------------------------------------------------------------------
-// OperationTypeIndex
+// AllocationOperationName
 //------------------------------------------------------------------------------
-//  Convert an allocation operation type into a count-array index.
+//  Return the display name for a tracked allocation type.
 //------------------------------------------------------------------------------
-std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType type)
+QString AllocationOperationName(HeapVisualizer::AllocationHooks::TrackedAllocationType type)
+{
+    using HeapVisualizer::AllocationHooks::TrackedAllocationType;
+
+    switch (type)
+    {
+        case TrackedAllocationType::Malloc:
+            return QStringLiteral("malloc");
+        case TrackedAllocationType::Calloc:
+            return QStringLiteral("calloc");
+        case TrackedAllocationType::Realloc:
+            return QStringLiteral("realloc");
+        case TrackedAllocationType::ReallocArray:
+            return QStringLiteral("reallocarray");
+        case TrackedAllocationType::PosixMemalign:
+            return QStringLiteral("posix_memalign");
+        case TrackedAllocationType::AlignedAlloc:
+            return QStringLiteral("aligned_alloc");
+        case TrackedAllocationType::Memalign:
+            return QStringLiteral("memalign");
+        case TrackedAllocationType::Valloc:
+            return QStringLiteral("valloc");
+        case TrackedAllocationType::PValloc:
+            return QStringLiteral("pvalloc");
+        case TrackedAllocationType::Count:
+        default:
+            break;
+    }
+
+    return QStringLiteral("unknown");
+}
+
+
+//------------------------------------------------------------------------------
+// DeallocationOperationName
+//------------------------------------------------------------------------------
+//  Return the display name for a tracked deallocation type.
+//------------------------------------------------------------------------------
+QString DeallocationOperationName(HeapVisualizer::AllocationHooks::TrackedDeallocationType type)
+{
+    using HeapVisualizer::AllocationHooks::TrackedDeallocationType;
+
+    switch (type)
+    {
+        case TrackedDeallocationType::Free:
+            return QStringLiteral("free");
+        case TrackedDeallocationType::Realloc:
+            return QStringLiteral("realloc");
+        case TrackedDeallocationType::ReallocArray:
+            return QStringLiteral("reallocarray");
+        case TrackedDeallocationType::CFree:
+            return QStringLiteral("cfree");
+        case TrackedDeallocationType::Count:
+        default:
+            break;
+    }
+
+    return QStringLiteral("unknown");
+}
+
+
+//------------------------------------------------------------------------------
+// TrackedAllocationTypeIndex
+//------------------------------------------------------------------------------
+//  Convert a tracked allocation type into its summary count-array index.
+//------------------------------------------------------------------------------
+std::size_t TrackedAllocationTypeIndex(HeapVisualizer::AllocationHooks::TrackedAllocationType type)
 {
     return static_cast<std::size_t>(type);
 }
 
 
 //------------------------------------------------------------------------------
-// AllocationOperationName
+// TrackedDeallocationTypeIndex
 //------------------------------------------------------------------------------
-//  Return the display name for an allocation operation type.
+//  Convert a tracked deallocation type into its summary count-array index.
 //------------------------------------------------------------------------------
-QString AllocationOperationName(HeapVisualizer::AllocationHooks::AllocationType type)
+std::size_t TrackedDeallocationTypeIndex(HeapVisualizer::AllocationHooks::TrackedDeallocationType type)
 {
-    using HeapVisualizer::AllocationHooks::AllocationType;
-
-    switch (type)
-    {
-        case AllocationType::Malloc:
-            return QStringLiteral("malloc");
-        case AllocationType::Calloc:
-            return QStringLiteral("calloc");
-        case AllocationType::Realloc:
-            return QStringLiteral("realloc");
-        case AllocationType::ReallocArray:
-            return QStringLiteral("reallocarray");
-        case AllocationType::Free:
-            return QStringLiteral("free");
-        case AllocationType::CFree:
-            return QStringLiteral("cfree");
-        case AllocationType::PosixMemalign:
-            return QStringLiteral("posix_memalign");
-        case AllocationType::AlignedAlloc:
-            return QStringLiteral("aligned_alloc");
-        case AllocationType::Memalign:
-            return QStringLiteral("memalign");
-        case AllocationType::Valloc:
-            return QStringLiteral("valloc");
-        case AllocationType::PValloc:
-            return QStringLiteral("pvalloc");
-        case AllocationType::Count:
-        default:
-            break;
-    }
-
-    return QStringLiteral("unknown");
+    return static_cast<std::size_t>(type);
 }
 
 
@@ -1012,23 +1047,24 @@ void MainWindow::UpdateStreamingSummary(const StreamedAllocationSummary& summary
 //------------------------------------------------------------------------------
 void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 {
-    using HeapVisualizer::AllocationHooks::AllocationType;
+    using HeapVisualizer::AllocationHooks::TrackedAllocationType;
+    using HeapVisualizer::AllocationHooks::TrackedDeallocationType;
 
     constexpr std::array allocationDisplayTypes = {
-        AllocationType::Malloc,
-        AllocationType::Calloc,
-        AllocationType::Realloc,
-        AllocationType::ReallocArray,
-        AllocationType::AlignedAlloc,
-        AllocationType::Memalign,
-        AllocationType::PosixMemalign,
-        AllocationType::Valloc,
-        AllocationType::PValloc};
+        TrackedAllocationType::Malloc,
+        TrackedAllocationType::Calloc,
+        TrackedAllocationType::Realloc,
+        TrackedAllocationType::ReallocArray,
+        TrackedAllocationType::AlignedAlloc,
+        TrackedAllocationType::Memalign,
+        TrackedAllocationType::PosixMemalign,
+        TrackedAllocationType::Valloc,
+        TrackedAllocationType::PValloc};
     constexpr std::array deallocationDisplayTypes = {
-        AllocationType::Free,
-        AllocationType::Realloc,
-        AllocationType::ReallocArray,
-        AllocationType::CFree};
+        TrackedDeallocationType::Free,
+        TrackedDeallocationType::Realloc,
+        TrackedDeallocationType::ReallocArray,
+        TrackedDeallocationType::CFree};
     constexpr int baseRowCount = 12;
     const int rowCount = baseRowCount +
                          static_cast<int>(allocationDisplayTypes.size()) +
@@ -1076,9 +1112,9 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
         summary.mAllocatedPages == 0);
     SetTableRow(mOverviewTable, row++, tr("Tracked Allocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedAllocations)));
 
-    for (AllocationType type : allocationDisplayTypes)
+    for (TrackedAllocationType type : allocationDisplayTypes)
     {
-        const std::uint64_t operationCount = summary.mTrackedAllocationsByType[OperationTypeIndex(type)];
+        const std::uint64_t operationCount = summary.mTrackedAllocationsByType[TrackedAllocationTypeIndex(type)];
         SetTableRow(
             mOverviewTable,
             row++,
@@ -1090,13 +1126,13 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
 
     SetTableRow(mOverviewTable, row++, tr("Tracked Deallocations"), QString::fromStdString(BuildCommaSeparatedIntegerText(summary.mTrackedDeallocations)));
 
-    for (AllocationType type : deallocationDisplayTypes)
+    for (TrackedDeallocationType type : deallocationDisplayTypes)
     {
-        const std::uint64_t operationCount = summary.mTrackedDeallocationsByType[OperationTypeIndex(type)];
+        const std::uint64_t operationCount = summary.mTrackedDeallocationsByType[TrackedDeallocationTypeIndex(type)];
         SetTableRow(
             mOverviewTable,
             row++,
-            QStringLiteral("    ") + AllocationOperationName(type),
+            QStringLiteral("    ") + DeallocationOperationName(type),
             QString::fromStdString(BuildCommaSeparatedIntegerText(operationCount)),
             false,
             operationCount == 0);

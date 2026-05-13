@@ -117,7 +117,7 @@ static void* CallLibcMemalign(size_t alignment, size_t size)
 HEAPVISUALIZER_PRELOAD_EXPORT void* malloc(size_t size)
 {
     void* pointer = CallLibcMalloc(size);
-    TrackAllocation(pointer, size, AllocationType_Malloc);
+    TrackAllocation(pointer, size, TrackedAllocationType_Malloc);
     return pointer;
 }
 
@@ -133,7 +133,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* calloc(size_t count, size_t size)
     void* pointer = CallLibcCalloc(count, size);
     if (pointer != NULL)
     {
-        TrackAllocation(pointer, count * size, AllocationType_Calloc);
+        TrackAllocation(pointer, count * size, TrackedAllocationType_Calloc);
     }
 
     return pointer;
@@ -150,8 +150,8 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* realloc(void* pointer, size_t size)
     void* newPointer = CallLibcRealloc(pointer, size);
     if ((newPointer != NULL) || (size == 0))
     {
-        UntrackAllocation(pointer, AllocationType_Realloc);
-        TrackAllocation(newPointer, size, AllocationType_Realloc);
+        UntrackAllocation(pointer, TrackedDeallocationType_Realloc);
+        TrackAllocation(newPointer, size, TrackedAllocationType_Realloc);
     }
 
     return newPointer;
@@ -175,8 +175,8 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* reallocarray(void* pointer, size_t count, si
     void* newPointer = CallLibcRealloc(pointer, allocationSize);
     if ((newPointer != NULL) || (allocationSize == 0))
     {
-        UntrackAllocation(pointer, AllocationType_ReallocArray);
-        TrackAllocation(newPointer, allocationSize, AllocationType_ReallocArray);
+        UntrackAllocation(pointer, TrackedDeallocationType_ReallocArray);
+        TrackAllocation(newPointer, allocationSize, TrackedAllocationType_ReallocArray);
     }
 
     return newPointer;
@@ -190,7 +190,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* reallocarray(void* pointer, size_t count, si
 //------------------------------------------------------------------------------
 HEAPVISUALIZER_PRELOAD_EXPORT void free(void* pointer)
 {
-    UntrackAllocation(pointer, AllocationType_Free);
+    UntrackAllocation(pointer, TrackedDeallocationType_Free);
     CallLibcFree(pointer);
 }
 
@@ -202,7 +202,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT void free(void* pointer)
 //------------------------------------------------------------------------------
 HEAPVISUALIZER_PRELOAD_EXPORT void cfree(void* pointer)
 {
-    UntrackAllocation(pointer, AllocationType_CFree);
+    UntrackAllocation(pointer, TrackedDeallocationType_CFree);
     CallLibcFree(pointer);
 }
 
@@ -229,7 +229,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT int posix_memalign(void** memoryPointer, size_t al
         return ENOMEM;
     }
 
-    TrackAllocation(pointer, size, AllocationType_PosixMemalign);
+    TrackAllocation(pointer, size, TrackedAllocationType_PosixMemalign);
     *memoryPointer = pointer;
     return 0;
 }
@@ -243,7 +243,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT int posix_memalign(void** memoryPointer, size_t al
 HEAPVISUALIZER_PRELOAD_EXPORT void* aligned_alloc(size_t alignment, size_t size)
 {
     void* pointer = CallLibcMemalign(alignment, size);
-    TrackAllocation(pointer, size, AllocationType_AlignedAlloc);
+    TrackAllocation(pointer, size, TrackedAllocationType_AlignedAlloc);
     return pointer;
 }
 
@@ -256,7 +256,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* aligned_alloc(size_t alignment, size_t size)
 HEAPVISUALIZER_PRELOAD_EXPORT void* memalign(size_t alignment, size_t size)
 {
     void* pointer = CallLibcMemalign(alignment, size);
-    TrackAllocation(pointer, size, AllocationType_Memalign);
+    TrackAllocation(pointer, size, TrackedAllocationType_Memalign);
     return pointer;
 }
 
@@ -269,7 +269,7 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* memalign(size_t alignment, size_t size)
 HEAPVISUALIZER_PRELOAD_EXPORT void* valloc(size_t size)
 {
     void* pointer = CallLibcMemalign(PageSize(), size);
-    TrackAllocation(pointer, size, AllocationType_Valloc);
+    TrackAllocation(pointer, size, TrackedAllocationType_Valloc);
     return pointer;
 }
 
@@ -291,6 +291,6 @@ HEAPVISUALIZER_PRELOAD_EXPORT void* pvalloc(size_t size)
     }
 
     pointer = CallLibcMemalign(pageSize, allocationSize);
-    TrackAllocation(pointer, allocationSize, AllocationType_PValloc);
+    TrackAllocation(pointer, allocationSize, TrackedAllocationType_PValloc);
     return pointer;
 }

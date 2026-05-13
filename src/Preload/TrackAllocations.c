@@ -17,7 +17,7 @@ typedef struct AllocationRecord
 {
     void* mAddress;
     size_t mSize;
-    AllocationType mType;
+    TrackedAllocationType mType;
 } AllocationRecord;
 
 typedef struct AllocationPool
@@ -31,8 +31,8 @@ typedef struct AllocationPool
     uint64_t mTrackedDeallocations;
     uint64_t mUntrackedAllocations;
     uint64_t mUntrackedDeallocations;
-    uint64_t mTrackedAllocationsByType[AllocationType_Count];
-    uint64_t mTrackedDeallocationsByType[AllocationType_Count];
+    uint64_t mTrackedAllocationsByType[TrackedAllocationType_Count];
+    uint64_t mTrackedDeallocationsByType[TrackedDeallocationType_Count];
 } AllocationPool;
 
 static const char SnapshotMagic[] = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
@@ -73,33 +73,11 @@ static uint8_t gSnapshotSendBuffer[
     sizeof(uint64_t) +                                              // total frame length
     (SNAPSHOT_POOL_COUNTER_COUNT * SNAPSHOT_COUNTER_BYTES) +        // counters
     (SNAPSHOT_PAGE_SIZE_BYTES) +                                    // page size
-    (AllocationType_Count * SNAPSHOT_COUNTER_BYTES) +               // allocations by type
-    (AllocationType_Count * SNAPSHOT_COUNTER_BYTES) +               // deallocations by type
+    (TrackedAllocationType_Count * SNAPSHOT_COUNTER_BYTES) +        // allocations by type
+    (TrackedDeallocationType_Count * SNAPSHOT_COUNTER_BYTES) +      // deallocations by type
     (NUM_ALLOCATION_RECORDS * SNAPSHOT_ALLOCATION_RECORD_BYTES) +   // allocation records
     sizeof(SnapshotFooter)                                          // footer
 ];
-
-
-//------------------------------------------------------------------------------
-// OperationTypeIndex
-//------------------------------------------------------------------------------
-//  Convert an allocation operation type into a count-array index.
-//------------------------------------------------------------------------------
-static inline size_t OperationTypeIndex(AllocationType type)
-{
-    return (size_t)type;
-}
-
-
-//------------------------------------------------------------------------------
-// IsValidOperationType
-//------------------------------------------------------------------------------
-//  Return whether an allocation operation type is inside the known range.
-//------------------------------------------------------------------------------
-static inline bool IsValidOperationType(AllocationType type)
-{
-    return OperationTypeIndex(type) < OperationTypeIndex(AllocationType_Count);
-}
 
 
 //------------------------------------------------------------------------------
@@ -321,12 +299,12 @@ static bool SendSerializedAllocations(int fd)
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mUntrackedDeallocations);
 
     // Add the allocations by type.
-    for (size_t typeIndex = 0; serialized && (typeIndex < OperationTypeIndex(AllocationType_Count)); typeIndex++)
+    for (size_t typeIndex = 0; serialized && (typeIndex < TrackedAllocationType_Count); typeIndex++)
     {
         serialized &= AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mTrackedAllocationsByType[typeIndex]);
     }
     // Add the deallocations by type.
-    for (size_t typeIndex = 0; serialized && (typeIndex < OperationTypeIndex(AllocationType_Count)); typeIndex++)
+    for (size_t typeIndex = 0; serialized && (typeIndex < TrackedDeallocationType_Count); typeIndex++)
     {
         serialized &= AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mTrackedDeallocationsByType[typeIndex]);
     }
@@ -562,9 +540,12 @@ static void CleanupTrailingTombstones(size_t deletedRecordIndex)
 //------------------------------------------------------------------------------
 //  Track a single allocation in the fixed-size tracking pool.
 //------------------------------------------------------------------------------
-void TrackAllocation(void* pointer, size_t size, AllocationType type)
+void TrackAllocation(void* pointer, size_t size, TrackedAllocationType type)
 {
-    if ((pointer == NULL) || (gAllocationPool.mRecords == NULL) || (gAllocationPool.mCapacity == 0) || (!IsValidOperationType(type)))
+    if ((pointer == NULL) ||
+        (gAllocationPool.mRecords == NULL) ||
+        (gAllocationPool.mCapacity == 0) ||
+        (type >= TrackedAllocationType_Count))
     {
         return;
     }
@@ -584,7 +565,7 @@ void TrackAllocation(void* pointer, size_t size, AllocationType type)
             record->mType = type;
             gAllocationPool.mAllocationCount++;
             gAllocationPool.mTrackedAllocations++;
-            gAllocationPool.mTrackedAllocationsByType[OperationTypeIndex(type)]++;
+            gAllocationPool.mTrackedAllocationsByType[type]++;
             gAllocationPool.mAllocationBytes += size;
             UnlockPool(&gAllocationPool);
             return;
@@ -601,7 +582,7 @@ void TrackAllocation(void* pointer, size_t size, AllocationType type)
 //------------------------------------------------------------------------------
 //  Remove an allocation from the allocation pool.
 //------------------------------------------------------------------------------
-void UntrackAllocation(void* pointer, AllocationType type)
+void UntrackAllocation(void* pointer, TrackedDeallocationType type)
 {
     if (pointer == NULL)
     {
@@ -610,7 +591,9 @@ void UntrackAllocation(void* pointer, AllocationType type)
 
     LockPool(&gAllocationPool);
 
-    if ((gAllocationPool.mRecords == NULL) || (gAllocationPool.mCapacity == 0) || (!IsValidOperationType(type)))
+    if ((gAllocationPool.mRecords == NULL) ||
+        (gAllocationPool.mCapacity == 0) ||
+        (type >= TrackedDeallocationType_Count))
     {
         gAllocationPool.mUntrackedDeallocations++;
         UnlockPool(&gAllocationPool);
@@ -628,10 +611,10 @@ void UntrackAllocation(void* pointer, AllocationType type)
             gAllocationPool.mAllocationBytes -= record->mSize;
             gAllocationPool.mAllocationCount--;
             gAllocationPool.mTrackedDeallocations++;
-            gAllocationPool.mTrackedDeallocationsByType[OperationTypeIndex(type)]++;
+            gAllocationPool.mTrackedDeallocationsByType[type]++;
             record->mAddress = TombstoneAddress;
             record->mSize = 0;
-            record->mType = AllocationType_Malloc;
+            record->mType = TrackedAllocationType_Malloc;
             CleanupTrailingTombstones(recordIndex);
             UnlockPool(&gAllocationPool);
             return;
