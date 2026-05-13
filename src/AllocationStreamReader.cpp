@@ -413,6 +413,8 @@ void AllocationStreamReader::ReceiveSocketFrame(std::uintptr_t clientSocketValue
     const NativeSocket clientSocket = static_cast<NativeSocket>(clientSocketValue);
     std::vector<std::uint8_t> bufferedData;
     std::size_t bufferedDataSize = 0;
+    std::chrono::steady_clock::time_point frameReadStartTime;
+    bool hasFrameReadStartTime = false;
 
     // Read from the socket until an error occurs or it is shut down.
     while (true)
@@ -456,6 +458,11 @@ void AllocationStreamReader::ReceiveSocketFrame(std::uintptr_t clientSocketValue
                 {
                     ConsumeBufferedData(bufferedData, bufferedDataSize, i);
                 }
+                if (!hasFrameReadStartTime)
+                {
+                    frameReadStartTime = std::chrono::steady_clock::now();
+                    hasFrameReadStartTime = true;
+                }
                 foundHeader = true;
                 break;
             }
@@ -480,20 +487,29 @@ void AllocationStreamReader::ReceiveSocketFrame(std::uintptr_t clientSocketValue
         {
             // Clear the buffer and try again.
             bufferedDataSize = 0;
+            hasFrameReadStartTime = false;
             continue;
         }
         if (serializedFrameSize < MinimumSnapshotFrameSize)
         {
             // Clear the buffer and try again.
             bufferedDataSize = 0;
+            hasFrameReadStartTime = false;
             continue;
         }
 
         const std::size_t frameSize = static_cast<std::size_t>(serializedFrameSize);
         if (bufferedDataSize >= frameSize)
         {
-            ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), frameSize));
+            const std::uint64_t socketReadMicroseconds =
+                hasFrameReadStartTime
+                    ? static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - frameReadStartTime).count())
+                    : 0;
+            ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), frameSize), socketReadMicroseconds);
             ConsumeBufferedData(bufferedData, bufferedDataSize, frameSize);
+            hasFrameReadStartTime = false;
         }
     }
 }
@@ -543,7 +559,7 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
 //------------------------------------------------------------------------------
 //  Parse streamed heap allocation data into internal snapshot structures.
 //------------------------------------------------------------------------------
-void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> data)
+void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> data, std::uint64_t socketReadMicroseconds)
 {
     const auto processingStartTime = std::chrono::steady_clock::now();
 
@@ -650,7 +666,8 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
     StreamedAllocationSummary summary = BuildAllocationSummary(snapshot);
     // Record how many bytes it took to send this data from the preload.
     summary.mStreamPayloadSize = data.size();
-    summary.mReaderProcessingMicroseconds =
+    summary.mSocketReadMicroseconds = socketReadMicroseconds;
+    summary.mParserProcessingMicroseconds =
         static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - processingStartTime).count());

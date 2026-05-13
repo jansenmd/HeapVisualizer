@@ -68,7 +68,8 @@ struct StreamedAddressRange
 struct StreamedAllocationSummary
 {
     std::uint64_t mStreamPayloadSize = 0;
-    std::uint64_t mReaderProcessingMicroseconds = 0;
+    std::uint64_t mSocketReadMicroseconds = 0;
+    std::uint64_t mParserProcessingMicroseconds = 0;
     std::uint64_t mAllocationCount = 0;
     std::uint64_t mAllocationBytes = 0;
     std::uint64_t mPageSize = 4096;
@@ -136,7 +137,7 @@ private:
 
     void StreamingThreadMain(std::uintptr_t listenSocket);
     void ReceiveSocketFrame(std::uintptr_t clientSocket);
-    void ParseStreamingData(std::span<const std::uint8_t> data);
+    void ParseStreamingData(std::span<const std::uint8_t> data, std::uint64_t socketReadMicroseconds);
     void UpdateAddressRange(StreamedAddressRange& range, const StreamedAllocation& allocation) const;
     void AddAllocationToBin(std::vector<StreamedAllocationBin>& bins, const StreamedAllocation& allocation) const;
     void CalculateBinStatistics(StreamedAllocationBin& bin) const;

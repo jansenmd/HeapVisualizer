@@ -456,8 +456,8 @@ void SetTableRow(QTableWidget* tableWidget,
 BusyIndicatorBar::BusyIndicatorBar(QWidget* parent)
     : QWidget(parent)
 {
-    setFixedSize(180, 12);
-    setToolTip(QStringLiteral("Reader, view update, and idle time since the previous summary."));
+    setFixedSize(220, 12);
+    setToolTip(QStringLiteral("Socket reader, parser, view update, and idle time since the previous summary."));
 }
 
 
@@ -466,12 +466,14 @@ BusyIndicatorBar::BusyIndicatorBar(QWidget* parent)
 //------------------------------------------------------------------------------
 //  Update the duration values rendered by the processing duty-cycle bar.
 //------------------------------------------------------------------------------
-void BusyIndicatorBar::SetTimings(std::uint64_t readerMicroseconds,
+void BusyIndicatorBar::SetTimings(std::uint64_t socketReadMicroseconds,
+                                  std::uint64_t parserMicroseconds,
                                   std::uint64_t viewMicroseconds,
                                   std::uint64_t idleMicroseconds,
                                   bool hasTimingFrame)
 {
-    mReaderMicroseconds = readerMicroseconds;
+    mSocketReadMicroseconds = socketReadMicroseconds;
+    mParserMicroseconds = parserMicroseconds;
     mViewMicroseconds = viewMicroseconds;
     mIdleMicroseconds = idleMicroseconds;
     mHasTimingFrame = hasTimingFrame;
@@ -482,7 +484,7 @@ void BusyIndicatorBar::SetTimings(std::uint64_t readerMicroseconds,
 //------------------------------------------------------------------------------
 // paintEvent
 //------------------------------------------------------------------------------
-//  Paint reader, view, and idle time as proportional horizontal segments.
+//  Paint socket reader, parser, view, and idle time as proportional horizontal segments.
 //------------------------------------------------------------------------------
 void BusyIndicatorBar::paintEvent(QPaintEvent* event)
 {
@@ -501,18 +503,21 @@ void BusyIndicatorBar::paintEvent(QPaintEvent* event)
         return;
     }
 
-    const std::uint64_t totalMicroseconds = mReaderMicroseconds + mViewMicroseconds + mIdleMicroseconds;
+    const std::uint64_t totalMicroseconds =
+        mSocketReadMicroseconds + mParserMicroseconds + mViewMicroseconds + mIdleMicroseconds;
     if (totalMicroseconds == 0)
     {
         return;
     }
 
     const std::array segmentColors = {
+        QColor(QStringLiteral("#2f80ed")),
         QColor(QStringLiteral("#ef4444")),
         QColor(QStringLiteral("#f59e0b")),
         QColor(QStringLiteral("#22c55e"))};
     const std::array segmentValues = {
-        mReaderMicroseconds,
+        mSocketReadMicroseconds,
+        mParserMicroseconds,
         mViewMicroseconds,
         mIdleMicroseconds};
 
@@ -921,10 +926,11 @@ MainWindow::MainWindow(QWidget* parent)
 
     mBusyIndicatorLabel = new QLabel(this);
     mBusyIndicatorLabel->setObjectName(QStringLiteral("BusyIndicator"));
+    mBusyIndicatorLabel->setTextFormat(Qt::RichText);
     mBusyIndicatorLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     mBusyIndicatorLabel->setMinimumWidth(
         mBusyIndicatorLabel->fontMetrics().horizontalAdvance(
-            QStringLiteral("Reader 999.99 ms | Views 999.99 ms | Idle 999.99 ms | Busy 100.0%")));
+            QStringLiteral("Reader 999.99 ms | Parser 999.99 ms | Views 999.99 ms | Idle 999.99 ms | Busy 100.0%")));
     statusBar()->addPermanentWidget(mBusyIndicatorLabel);
 
     UpdateStreamingSummary({});
@@ -1185,7 +1191,8 @@ void MainWindow::UpdateBusyIndicator(const StreamedAllocationSummary& summary,
         return;
     }
 
-    const std::uint64_t totalMicroseconds = summary.mReaderProcessingMicroseconds + viewUpdateMicroseconds;
+    const std::uint64_t totalMicroseconds =
+        summary.mSocketReadMicroseconds + summary.mParserProcessingMicroseconds + viewUpdateMicroseconds;
     std::uint64_t idleMicroseconds = 0;
     QString idleText = QStringLiteral("     -- ms");
     QString busyText = QStringLiteral(" --.-%");
@@ -1209,7 +1216,8 @@ void MainWindow::UpdateBusyIndicator(const StreamedAllocationSummary& summary,
     if (mBusyIndicatorBar != nullptr)
     {
         mBusyIndicatorBar->SetTimings(
-            summary.mReaderProcessingMicroseconds,
+            summary.mSocketReadMicroseconds,
+            summary.mParserProcessingMicroseconds,
             viewUpdateMicroseconds,
             idleMicroseconds,
             mHasBusyIndicatorUpdateTime);
@@ -1218,12 +1226,25 @@ void MainWindow::UpdateBusyIndicator(const StreamedAllocationSummary& summary,
     mLastBusyIndicatorUpdateTime = updateStartTime;
     mHasBusyIndicatorUpdateTime = true;
 
+    const auto durationHtml = [](std::uint64_t microseconds)
+    {
+        return QString::fromStdString(BuildDurationText(microseconds)).replace(QStringLiteral(" "), QStringLiteral("&nbsp;"));
+    };
+    const auto textHtml = [](QString text)
+    {
+        return text.replace(QStringLiteral(" "), QStringLiteral("&nbsp;"));
+    };
+
     mBusyIndicatorLabel->setText(
-        tr("Reader %1 | Views %2 | Idle %3 | Busy %4")
-            .arg(QString::fromStdString(BuildDurationText(summary.mReaderProcessingMicroseconds)))
-            .arg(QString::fromStdString(BuildDurationText(viewUpdateMicroseconds)))
-            .arg(idleText)
-            .arg(busyText));
+        tr("<span style=\"color:#2f80ed;\">Reader</span> %1 | "
+           "<span style=\"color:#ef4444;\">Parser</span> %2 | "
+           "<span style=\"color:#f59e0b;\">Views</span> %3 | "
+           "<span style=\"color:#22c55e;\">Idle</span> %4 | Busy %5")
+            .arg(durationHtml(summary.mSocketReadMicroseconds))
+            .arg(durationHtml(summary.mParserProcessingMicroseconds))
+            .arg(durationHtml(viewUpdateMicroseconds))
+            .arg(textHtml(idleText))
+            .arg(textHtml(busyText)));
 }
 
 

@@ -26,7 +26,8 @@ class BusyIndicatorBar : public QWidget
 public:
     explicit BusyIndicatorBar(QWidget* parent = nullptr);
 
-    void SetTimings(std::uint64_t readerMicroseconds,
+    void SetTimings(std::uint64_t socketReadMicroseconds,
+                    std::uint64_t parserMicroseconds,
                     std::uint64_t viewMicroseconds,
                     std::uint64_t idleMicroseconds,
                     bool hasTimingFrame);
@@ -35,7 +36,8 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
-    std::uint64_t mReaderMicroseconds = 0;
+    std::uint64_t mSocketReadMicroseconds = 0;
+    std::uint64_t mParserMicroseconds = 0;
     std::uint64_t mViewMicroseconds = 0;
     std::uint64_t mIdleMicroseconds = 0;
     bool mHasTimingFrame = false;
