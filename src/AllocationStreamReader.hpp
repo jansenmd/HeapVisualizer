@@ -21,13 +21,16 @@ constexpr std::size_t StreamedTrackedDeallocationTypeCount =
 struct StreamedAllocationBin
 {
     // Bin min and max range.
-    std::size_t mMinimumSize = 0;
-    std::size_t mMaximumSize = 0;
+    std::uint64_t mMinimumSize = 0;
+    std::uint64_t mMaximumSize = 0;
     // Total number of bytes within the bin.
     std::uint64_t mAllocationBytes = 0;
-    // Minimum and maxmium allocation within the bin.
-    std::size_t mMinimumAllocationSize = 0;
-    std::size_t mMaximumAllocationSize = 0;
+    // Minimum, maxmium, mean, and median allocations within the bin.
+    std::uint64_t mMinimumAllocationSize = 0;
+    std::uint64_t mMaximumAllocationSize = 0;
+    std::uint64_t mMeanAllocationSize = 0;
+    std::uint64_t mMedianAllocationSize = 0;
+    // Suppress showing the total bytes or number of allocations for this bin.
     bool mSuppressed = false;
     std::vector<std::size_t> mAllocationSizes;
 };
@@ -35,7 +38,7 @@ struct StreamedAllocationBin
 struct StreamedAllocation
 {
     std::uintptr_t mAddress = 0;
-    std::size_t mSize = 0;
+    std::uint64_t mSize = 0;
     HeapVisualizer::AllocationHooks::TrackedAllocationType mType =
         HeapVisualizer::AllocationHooks::TrackedAllocationType::Malloc;
 };
@@ -135,6 +138,7 @@ private:
     void ParseStreamingData(std::span<const std::uint8_t> data);
     void UpdateAddressRange(StreamedAddressRange& range, const StreamedAllocation& allocation) const;
     void AddAllocationToBin(std::vector<StreamedAllocationBin>& bins, const StreamedAllocation& allocation) const;
+    void CalculateBinStatistics(StreamedAllocationBin& bin) const;
     [[nodiscard]] StreamedAllocationSummary BuildAllocationSummary(const StreamedHeapSnapshot& snapshot) const;
 
     SummaryHandler mSummaryHandler;
@@ -142,6 +146,4 @@ private:
     std::atomic_uintptr_t mStreamingListenSocket = static_cast<std::uintptr_t>(-1);
     std::atomic_uintptr_t mStreamingClientSocket = static_cast<std::uintptr_t>(-1);
     std::thread mStreamingThread;
-    std::mutex mStreamedSnapshotsMutex;
-    std::vector<StreamedHeapSnapshot> mStreamedSnapshots;
 };

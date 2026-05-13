@@ -301,33 +301,6 @@ std::string BuildByteTickLabel(std::size_t byteCount)
 
 
 //------------------------------------------------------------------------------
-// CalculateMedianAllocationSize
-//------------------------------------------------------------------------------
-//  Calculate the median allocation size for a bin.
-//------------------------------------------------------------------------------
-std::size_t CalculateMedianAllocationSize(const std::vector<std::size_t>& allocationSizes)
-{
-    if (allocationSizes.empty())
-    {
-        return 0;
-    }
-
-    std::vector<std::size_t> sortedSizes = allocationSizes;
-    std::sort(sortedSizes.begin(), sortedSizes.end());
-
-    const std::size_t middleIndex = sortedSizes.size() / 2;
-    if ((sortedSizes.size() % 2) != 0)
-    {
-        return sortedSizes[middleIndex];
-    }
-
-    const std::size_t lowerValue = sortedSizes[middleIndex - 1];
-    const std::size_t upperValue = sortedSizes[middleIndex];
-    return lowerValue + ((upperValue - lowerValue) / 2);
-}
-
-
-//------------------------------------------------------------------------------
 // RoundUpToPowerOfTwo
 //------------------------------------------------------------------------------
 //  Round a value up to the next power of two.
@@ -1143,10 +1116,6 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
     {
         const StreamedAllocationBin& bin = mCurrentBins[static_cast<std::size_t>(row)];
         const std::size_t allocationCount = bin.mAllocationSizes.size();
-        const std::size_t meanBytes = allocationCount == 0
-                                          ? 0
-                                          : bin.mAllocationBytes / allocationCount;
-        const std::size_t medianBytes = CalculateMedianAllocationSize(bin.mAllocationSizes);
 
         std::ostringstream rangeText;
         rangeText << BuildBinLimitLabel(bin.mMinimumSize) << "-"
@@ -1162,9 +1131,9 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
         QTableWidgetItem* maximumItem = new QTableWidgetItem(
             QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMaximumAllocationSize)));
         QTableWidgetItem* meanItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(meanBytes)));
+            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMeanAllocationSize)));
         QTableWidgetItem* medianItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(medianBytes)));
+            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMedianAllocationSize)));
 
         rangeItem->setFlags(rangeItem->flags() & ~Qt::ItemIsEditable);
         countItem->setFlags(countItem->flags() & ~Qt::ItemIsEditable);

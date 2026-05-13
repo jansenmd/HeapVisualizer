@@ -645,13 +645,10 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
 
     // Convert the snapshot into a summary we can display.
     StreamedAllocationSummary summary = BuildAllocationSummary(snapshot);
+    // Record how many bytes it took to send this data from the preload.
     summary.mStreamPayloadSize = data.size();
 
-    {
-        std::lock_guard lock(mStreamedSnapshotsMutex);
-        mStreamedSnapshots.push_back(std::move(snapshot));
-    }
-
+    // Pass the summary result to MainWindow::UpdateStreamingSummary().
     if (mSummaryHandler)
     {
         mSummaryHandler(summary);
@@ -708,7 +705,7 @@ void AllocationStreamReader::AddAllocationToBin(std::vector<StreamedAllocationBi
         std::size_t nextMaximumSize = bins.empty() ? 64 :
             (bins.back().mMaximumSize > (std::numeric_limits<std::size_t>::max() / 2)) ? std::numeric_limits<std::size_t>::max() : bins.back().mMaximumSize * 2;
 
-        bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, false, {}});
+        bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, 0, 0, false, {}});
     }
 
     // There should be a bin that fits our allocation.
@@ -735,6 +732,43 @@ void AllocationStreamReader::AddAllocationToBin(std::vector<StreamedAllocationBi
     // Track the allocation sizes and total byte count within the bin.
     binIterator->mAllocationBytes += allocation.mSize;
     binIterator->mAllocationSizes.push_back(allocation.mSize);
+}
+
+
+//------------------------------------------------------------------------------
+// CalculateBinStatistics
+//------------------------------------------------------------------------------
+//  Calculate cached statistics for an allocation bin after all sizes are known.
+//------------------------------------------------------------------------------
+void AllocationStreamReader::CalculateBinStatistics(StreamedAllocationBin& bin) const
+{
+    // If the bin is empty, set to zero and return.
+    if (bin.mAllocationSizes.empty())
+    {
+        bin.mMeanAllocationSize = 0;
+        bin.mMedianAllocationSize = 0;
+        return;
+    }
+
+    // Calculating the mean is easy; total bytes / number of allocations
+    bin.mMeanAllocationSize = bin.mAllocationBytes / static_cast<std::uint64_t>(bin.mAllocationSizes.size());
+
+    // Need to sort the allocations by size to find the median.
+    std::sort(bin.mAllocationSizes.begin(), bin.mAllocationSizes.end());
+    const std::size_t middleIndex = bin.mAllocationSizes.size() / 2;
+    if ((bin.mAllocationSizes.size() % 2) != 0)
+    {
+        // If the list has an odd number of entries, just grab the middle one.
+        bin.mMedianAllocationSize = bin.mAllocationSizes[middleIndex];
+    }
+    else
+    {
+        // Even number of entries, average the middle 2.
+        const std::uint64_t lowerValue = bin.mAllocationSizes[middleIndex - 1];
+        const std::uint64_t upperValue = bin.mAllocationSizes[middleIndex];
+        bin.mMedianAllocationSize = (lowerValue + upperValue) / 2;
+    }
+
 }
 
 
@@ -777,12 +811,18 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
         AddAllocationToBin(summary.mBins, allocation);
     }
 
-    // Sort the page ranges.
-    std::sort(allocatedPageRanges.begin(), allocatedPageRanges.end());
+    // Calculate the mean and median allocation sizes in each bin.
+    for (StreamedAllocationBin& bin : summary.mBins)
+    {
+        CalculateBinStatistics(bin);
+    }
 
+    // Count the number of pages "covered" by all the allocations.
+    // Start by sorting the page ranges.
+    std::sort(allocatedPageRanges.begin(), allocatedPageRanges.end());
     bool hasMergedPageRange = false;
     std::uintptr_t lastPageEnd = 0;
-    // Count the number of pages "covered" by all the allocations.
+    // Walk the sorted page ranges, counting the number of covered pages.
     for (const auto& pageRange : allocatedPageRanges)
     {
         // Handle the initial iteration OR if the start page of the next
