@@ -49,10 +49,8 @@ struct StreamedHeapSnapshot
     std::uint64_t mTrackedDeallocations = 0;
     std::uint64_t mUntrackedAllocations = 0;
     std::uint64_t mUntrackedDeallocations = 0;
-    std::array<std::uint64_t, StreamedTrackedAllocationTypeCount>
-        mTrackedAllocationsByType = {};
-    std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount>
-        mTrackedDeallocationsByType = {};
+    std::array<std::uint64_t, StreamedTrackedAllocationTypeCount> mTrackedAllocationsByType = {};
+    std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount> mTrackedDeallocationsByType = {};
 };
 
 struct StreamedAddressRange
@@ -60,17 +58,16 @@ struct StreamedAddressRange
     bool mHasAllocations = false;
     std::uintptr_t mLowestAddress = 0;
     std::uintptr_t mHighestAddress = 0;
-    std::size_t mHighestAddressAllocationSize = 0;
 };
 
 struct StreamedAllocationSummary
 {
-    std::size_t mStreamPayloadSize = 0;
-    std::size_t mAllocationCount = 0;
-    std::size_t mAllocationBytes = 0;
-    std::size_t mPageSize = 4096;
+    std::uint64_t mStreamPayloadSize = 0;
+    std::uint64_t mAllocationCount = 0;
+    std::uint64_t mAllocationBytes = 0;
+    std::uint64_t mPageSize = 4096;
     bool mHasPageSize = false;
-    std::size_t mAllocatedPages = 0;
+    std::uint64_t mAllocatedPages = 0;
     StreamedAddressRange mAddressRange;
     std::uint64_t mTrackedAllocations = 0;
     std::uint64_t mTrackedDeallocations = 0;
@@ -111,7 +108,7 @@ public:
     bool IsActive() const;
 
 private:
-    [[nodiscard]] static bool IsValidTrackedAllocationType(
+    [[nodiscard]] static inline bool IsValidTrackedAllocationType(
         HeapVisualizer::AllocationHooks::TrackedAllocationType type);
     static void ConsumeBufferedData(std::vector<std::uint8_t>& bufferedData,
                                     std::size_t& bufferedDataSize,

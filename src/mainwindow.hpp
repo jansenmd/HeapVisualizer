@@ -53,7 +53,6 @@ private:
     void StartStreaming();
     void StopStreaming();
     void ToggleStreaming();
-    [[nodiscard]] std::uintptr_t CalculateAddressRangeEnd(const StreamedAddressRange& range) const;
     [[nodiscard]] std::string BuildAddressRangeText(const StreamedAddressRange& range) const;
     [[nodiscard]] std::string BuildAddressText(std::uintptr_t address, bool hasAddress, int minimumDigits = 0) const;
     [[nodiscard]] std::string BuildHexValueText(std::size_t value, bool hasValue) const;

@@ -928,28 +928,6 @@ void MainWindow::ToggleStreaming()
 
 
 //------------------------------------------------------------------------------
-// CalculateAddressRangeEnd
-//------------------------------------------------------------------------------
-//  Calculate the exclusive end address for a streamed allocation range.
-//------------------------------------------------------------------------------
-std::uintptr_t MainWindow::CalculateAddressRangeEnd(const StreamedAddressRange& range) const
-{
-    if (!range.mHasAllocations)
-    {
-        return 0;
-    }
-
-    const std::uintptr_t maximumAddress = std::numeric_limits<std::uintptr_t>::max();
-    if (range.mHighestAddressAllocationSize <= maximumAddress - range.mHighestAddress)
-    {
-        return range.mHighestAddress + range.mHighestAddressAllocationSize;
-    }
-
-    return maximumAddress;
-}
-
-
-//------------------------------------------------------------------------------
 // BuildAddressRangeText
 //------------------------------------------------------------------------------
 //  Build display text for a virtual memory address range.
@@ -961,12 +939,10 @@ std::string MainWindow::BuildAddressRangeText(const StreamedAddressRange& range)
         return "none";
     }
 
-    const std::uintptr_t rangeEndAddress = CalculateAddressRangeEnd(range);
-
     std::ostringstream output;
     output << "0x" << std::uppercase << std::hex << range.mLowestAddress
-           << " - 0x" << rangeEndAddress
-           << std::dec << " (" << (rangeEndAddress - range.mLowestAddress) << " bytes)";
+           << " - 0x" << range.mHighestAddress
+           << std::dec << " (" << (range.mHighestAddress - range.mLowestAddress) << " bytes)";
 
     return output.str();
 }
@@ -1072,7 +1048,7 @@ void MainWindow::UpdateOverviewView(const StreamedAllocationSummary& summary)
     mOverviewTable->setRowCount(rowCount);
 
     const std::uintptr_t rangeStart = summary.mAddressRange.mLowestAddress;
-    const std::uintptr_t rangeEnd = CalculateAddressRangeEnd(summary.mAddressRange);
+    const std::uintptr_t rangeEnd = summary.mAddressRange.mHighestAddress;
     const int addressDigitCount = summary.mAddressRange.mHasAllocations
                                       ? std::max(HexDigitCount(rangeStart), HexDigitCount(rangeEnd))
                                       : 0;

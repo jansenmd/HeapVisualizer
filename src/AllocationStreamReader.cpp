@@ -56,8 +56,7 @@ static_assert(StreamedTrackedDeallocationTypeCount ==
 //------------------------------------------------------------------------------
 //  Return whether a tracked allocation type is inside the known range.
 //------------------------------------------------------------------------------
-bool AllocationStreamReader::IsValidTrackedAllocationType(
-    HeapVisualizer::AllocationHooks::TrackedAllocationType type)
+bool inline AllocationStreamReader::IsValidTrackedAllocationType(HeapVisualizer::AllocationHooks::TrackedAllocationType type)
 {
     return static_cast<std::size_t>(type) < TrackedAllocationTypeCount;
 }
@@ -590,6 +589,7 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
         snapshot.mPageSize = DefaultAllocationPageSize;
     }
 
+    // Extract the number of each type of allocation.
     for (std::size_t typeIndex = 0; typeIndex < StreamedTrackedAllocationTypeCount; typeIndex++)
     {
         std::uint64_t typeCount = 0;
@@ -600,6 +600,7 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
         snapshot.mTrackedAllocationsByType[typeIndex] = static_cast<std::uint64_t>(typeCount);
     }
 
+    // Extract the number of each type of deallocation.
     for (std::size_t typeIndex = 0; typeIndex < StreamedTrackedDeallocationTypeCount; typeIndex++)
     {
         std::uint64_t typeCount = 0;
@@ -610,34 +611,39 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
         snapshot.mTrackedDeallocationsByType[typeIndex] = static_cast<std::uint64_t>(typeCount);
     }
 
+    // Extract every live allocation.
+    // Reserve the total number of allocations so the push backs don't have to
+    // grow the vector.
+    snapshot.mAllocations.reserve(snapshot.mAllocationCount);
+    std::uint64_t address = 0;
+    std::uint64_t size = 0;
+    std::uint32_t typeValue = 0;
     for (std::uint64_t allocationIndex = 0; allocationIndex < snapshot.mAllocationCount; allocationIndex++)
     {
-        std::uint64_t address = 0;
-        std::uint64_t size = 0;
-        std::uint32_t typeValue = 0;
-
         if ((!ReadUInt64(data, offset, address)) ||
             (!ReadUInt64(data, offset, size)) ||
             (!ReadUInt32(data, offset, typeValue)))
         {
             return;
         }
-
+        // Sanity check on the allocation type.
         const auto type = static_cast<HeapVisualizer::AllocationHooks::TrackedAllocationType>(typeValue);
         if (!IsValidTrackedAllocationType(type))
         {
             return;
         }
-
+        // Add this entry to the list of allocations.
         snapshot.mAllocations.push_back({static_cast<std::uintptr_t>(address), static_cast<std::size_t>(size), type});
     }
 
+    // Make sure all the data was consumed correctly.
     if ((data.size() - offset != SnapshotFooter.size()) ||
         (std::memcmp(data.data() + offset, SnapshotFooter.data(), SnapshotFooter.size()) != 0))
     {
         return;
     }
 
+    // Convert the snapshot into a summary we can display.
     StreamedAllocationSummary summary = BuildAllocationSummary(snapshot);
     summary.mStreamPayloadSize = data.size();
 
@@ -660,24 +666,24 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
 //------------------------------------------------------------------------------
 void AllocationStreamReader::UpdateAddressRange(StreamedAddressRange& range, const StreamedAllocation& allocation) const
 {
+    const std::uintptr_t allocationEndAddress = allocation.mAddress + allocation.mSize;
+
     if (!range.mHasAllocations)
     {
         range.mHasAllocations = true;
         range.mLowestAddress = allocation.mAddress;
-        range.mHighestAddress = allocation.mAddress;
-        range.mHighestAddressAllocationSize = allocation.mSize;
-        return;
+        range.mHighestAddress = allocationEndAddress;
     }
-
-    if (allocation.mAddress < range.mLowestAddress)
+    else
     {
-        range.mLowestAddress = allocation.mAddress;
-    }
-
-    if (allocation.mAddress > range.mHighestAddress)
-    {
-        range.mHighestAddress = allocation.mAddress;
-        range.mHighestAddressAllocationSize = allocation.mSize;
+        if (allocation.mAddress < range.mLowestAddress)
+        {
+            range.mLowestAddress = allocation.mAddress;
+        }
+        if (allocationEndAddress > range.mHighestAddress)
+        {
+            range.mHighestAddress = allocationEndAddress;
+        }
     }
 }
 
@@ -690,50 +696,31 @@ void AllocationStreamReader::UpdateAddressRange(StreamedAddressRange& range, con
 void AllocationStreamReader::AddAllocationToBin(std::vector<StreamedAllocationBin>& bins,
                                                 const StreamedAllocation& allocation) const
 {
-    std::size_t minimumSize = 0;
-    std::size_t maximumSize = 64;
-
-    while ((allocation.mSize > maximumSize) &&
-           (maximumSize <= (std::numeric_limits<std::size_t>::max() / 2)))
+    // Make sure the bins vector has a bin for the current allocation.
+    while (bins.empty() || (bins.back().mMaximumSize < allocation.mSize))
     {
-        minimumSize = maximumSize + 1;
-        maximumSize *= 2;
-    }
-
-    if (allocation.mSize > maximumSize)
-    {
-        minimumSize = maximumSize + 1;
-        maximumSize = std::numeric_limits<std::size_t>::max();
-    }
-
-    while (bins.empty() || (bins.back().mMaximumSize < maximumSize))
-    {
+        // Grow the number of bin entries until a bin that fits the current
+        // allocation exists.
+        // Binning starts with the range 0-64 bytes.
+        // After that, it goes up by powers of 2.
+        // So, 65-128, 129-256, etc.
         const std::size_t nextMinimumSize = bins.empty() ? 0 : bins.back().mMaximumSize + 1;
-        std::size_t nextMaximumSize = 64;
-
-        if (!bins.empty())
-        {
-            if (bins.back().mMaximumSize > (std::numeric_limits<std::size_t>::max() / 2))
-            {
-                nextMaximumSize = std::numeric_limits<std::size_t>::max();
-            }
-            else
-            {
-                nextMaximumSize = bins.back().mMaximumSize * 2;
-            }
-        }
+        std::size_t nextMaximumSize = bins.empty() ? 64 :
+            (bins.back().mMaximumSize > (std::numeric_limits<std::size_t>::max() / 2)) ? std::numeric_limits<std::size_t>::max() : bins.back().mMaximumSize * 2;
 
         bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, 0, false, {}});
     }
 
+    // There should be a bin that fits our allocation.
     const auto binIterator = std::find_if(
         bins.begin(),
         bins.end(),
-        [minimumSize, maximumSize](const StreamedAllocationBin& bin)
+        [allocation](const StreamedAllocationBin& bin)
         {
-            return (bin.mMinimumSize == minimumSize) && (bin.mMaximumSize == maximumSize);
+            return (bin.mMinimumSize <= allocation.mSize) && (bin.mMaximumSize >= allocation.mSize);
         });
 
+    // Track the largest and smallest allocation within the bin.
     if (binIterator->mAllocationCount == 0)
     {
         binIterator->mMinimumAllocationSize = allocation.mSize;
@@ -745,6 +732,7 @@ void AllocationStreamReader::AddAllocationToBin(std::vector<StreamedAllocationBi
         binIterator->mMaximumAllocationSize = std::max(binIterator->mMaximumAllocationSize, allocation.mSize);
     }
 
+    // Track the number of allocations and total byte count within the bin.
     binIterator->mAllocationCount++;
     binIterator->mAllocationBytes += allocation.mSize;
     binIterator->mAllocationSizes.push_back(allocation.mSize);
@@ -759,7 +747,6 @@ void AllocationStreamReader::AddAllocationToBin(std::vector<StreamedAllocationBi
 StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const StreamedHeapSnapshot& snapshot) const
 {
     StreamedAllocationSummary summary;
-    std::vector<std::pair<std::uintptr_t, std::uintptr_t>> allocatedPageRanges;
 
     summary.mAllocationCount = snapshot.mAllocationCount;
     summary.mAllocationBytes = snapshot.mAllocationBytes;
@@ -772,27 +759,19 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
     summary.mTrackedAllocationsByType = snapshot.mTrackedAllocationsByType;
     summary.mTrackedDeallocationsByType = snapshot.mTrackedDeallocationsByType;
 
+    // Track the range of pages covered by each allocation.
+    std::vector<std::pair<std::uintptr_t, std::uintptr_t>> allocatedPageRanges;
+    allocatedPageRanges.reserve(snapshot.mAllocations.size());
+    const std::uintptr_t pageSize = static_cast<std::uintptr_t>(summary.mPageSize);
     for (const StreamedAllocation& allocation : snapshot.mAllocations)
     {
-        if (snapshot.mAllocationCount == 0)
-        {
-            summary.mAllocationCount++;
-            summary.mAllocationBytes += allocation.mSize;
-        }
-
         if (allocation.mSize > 0)
         {
-            const std::uintptr_t maximumAddress = std::numeric_limits<std::uintptr_t>::max();
-            const std::uintptr_t pageSize = static_cast<std::uintptr_t>(summary.mPageSize);
-            const std::uintptr_t allocationEndAddress =
-                (allocation.mSize - 1 <= maximumAddress - allocation.mAddress)
-                    ? allocation.mAddress + allocation.mSize - 1
-                    : maximumAddress;
-            allocatedPageRanges.emplace_back(
-                allocation.mAddress / pageSize,
-                allocationEndAddress / pageSize);
+            const std::uintptr_t allocationEndAddress = allocation.mAddress + allocation.mSize - 1;
+            allocatedPageRanges.emplace_back(allocation.mAddress / pageSize, allocationEndAddress / pageSize);
         }
 
+        // Track the lowest and highest used memory addresses.
         UpdateAddressRange(summary.mAddressRange, allocation);
         AddAllocationToBin(summary.mBins, allocation);
     }
