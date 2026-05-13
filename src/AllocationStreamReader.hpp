@@ -20,10 +20,12 @@ constexpr std::size_t StreamedTrackedDeallocationTypeCount =
 
 struct StreamedAllocationBin
 {
+    // Bin min and max range.
     std::size_t mMinimumSize = 0;
     std::size_t mMaximumSize = 0;
-    std::uint64_t mAllocationCount = 0;
+    // Total number of bytes within the bin.
     std::uint64_t mAllocationBytes = 0;
+    // Minimum and maxmium allocation within the bin.
     std::size_t mMinimumAllocationSize = 0;
     std::size_t mMaximumAllocationSize = 0;
     bool mSuppressed = false;

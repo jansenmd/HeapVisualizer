@@ -708,7 +708,7 @@ void AllocationStreamReader::AddAllocationToBin(std::vector<StreamedAllocationBi
         std::size_t nextMaximumSize = bins.empty() ? 64 :
             (bins.back().mMaximumSize > (std::numeric_limits<std::size_t>::max() / 2)) ? std::numeric_limits<std::size_t>::max() : bins.back().mMaximumSize * 2;
 
-        bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, 0, false, {}});
+        bins.push_back({nextMinimumSize, nextMaximumSize, 0, 0, 0, false, {}});
     }
 
     // There should be a bin that fits our allocation.
@@ -721,7 +721,7 @@ void AllocationStreamReader::AddAllocationToBin(std::vector<StreamedAllocationBi
         });
 
     // Track the largest and smallest allocation within the bin.
-    if (binIterator->mAllocationCount == 0)
+    if (binIterator->mAllocationSizes.empty())
     {
         binIterator->mMinimumAllocationSize = allocation.mSize;
         binIterator->mMaximumAllocationSize = allocation.mSize;
@@ -732,8 +732,7 @@ void AllocationStreamReader::AddAllocationToBin(std::vector<StreamedAllocationBi
         binIterator->mMaximumAllocationSize = std::max(binIterator->mMaximumAllocationSize, allocation.mSize);
     }
 
-    // Track the number of allocations and total byte count within the bin.
-    binIterator->mAllocationCount++;
+    // Track the allocation sizes and total byte count within the bin.
     binIterator->mAllocationBytes += allocation.mSize;
     binIterator->mAllocationSizes.push_back(allocation.mSize);
 }
@@ -765,6 +764,7 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
     const std::uintptr_t pageSize = static_cast<std::uintptr_t>(summary.mPageSize);
     for (const StreamedAllocation& allocation : snapshot.mAllocations)
     {
+        // Track the number of pages spanned by all the allocations.
         if (allocation.mSize > 0)
         {
             const std::uintptr_t allocationEndAddress = allocation.mAddress + allocation.mSize - 1;
@@ -773,30 +773,34 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
 
         // Track the lowest and highest used memory addresses.
         UpdateAddressRange(summary.mAddressRange, allocation);
+        // Group allocations according to "bins", or power-of-two size ranges.
         AddAllocationToBin(summary.mBins, allocation);
     }
 
+    // Sort the page ranges.
     std::sort(allocatedPageRanges.begin(), allocatedPageRanges.end());
 
     bool hasMergedPageRange = false;
-    std::uintptr_t mergedPageRangeEnd = 0;
-
+    std::uintptr_t lastPageEnd = 0;
+    // Count the number of pages "covered" by all the allocations.
     for (const auto& pageRange : allocatedPageRanges)
     {
+        // Handle the initial iteration OR if the start page of the next
+        // allocation rolled over into a new page.
         if ((!hasMergedPageRange) ||
-            (pageRange.first > mergedPageRangeEnd))
+            (pageRange.first > lastPageEnd))
         {
             hasMergedPageRange = true;
-            mergedPageRangeEnd = pageRange.second;
+            // Add the number of pages spanned by this allocation.
             summary.mAllocatedPages += static_cast<std::size_t>(pageRange.second - pageRange.first + 1);
-            continue;
         }
-
-        if (pageRange.second > mergedPageRangeEnd)
+        // The start of the previous allocation wasn't a new page.
+        // What about the end of it?
+        else if (pageRange.second > lastPageEnd)
         {
-            summary.mAllocatedPages += static_cast<std::size_t>(pageRange.second - mergedPageRangeEnd);
-            mergedPageRangeEnd = pageRange.second;
+            summary.mAllocatedPages += static_cast<std::size_t>(pageRange.second - lastPageEnd);
         }
+        lastPageEnd = pageRange.second;
     }
 
     return summary;

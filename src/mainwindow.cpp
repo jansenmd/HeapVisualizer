@@ -488,7 +488,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
         if (!bin.mSuppressed)
         {
             maximumBytes = std::max(maximumBytes, bin.mAllocationBytes);
-            maximumAllocations = std::max(maximumAllocations, bin.mAllocationCount);
+            maximumAllocations = std::max(maximumAllocations, bin.mAllocationSizes.size());
         }
     }
 
@@ -566,7 +566,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
     for (int binIndex = 0; binIndex < binCount; binIndex++)
     {
         const StreamedAllocationBin& bin = mBins[static_cast<std::size_t>(binIndex)];
-        const std::size_t allocationCount = bin.mSuppressed ? 0 : bin.mAllocationCount;
+        const std::size_t allocationCount = bin.mSuppressed ? 0 : bin.mAllocationSizes.size();
         const double normalizedHeight = static_cast<double>(allocationCount) /
                                         static_cast<double>(maximumAllocations);
         const int x = chartRect.left() + (binIndex * slotWidth) + (slotWidth / 2);
@@ -597,7 +597,7 @@ void BinGraphWidget::paintEvent(QPaintEvent* event)
         const int labelX = chartRect.left() + (binIndex * slotWidth);
         const QRect labelRect(labelX, chartRect.bottom() + 4, slotWidth, 18);
         painter.setPen(
-            bin.mAllocationCount == 0
+            bin.mAllocationSizes.empty()
                 ? QColor(QStringLiteral("#9aa6b2"))
                 : QColor(QStringLiteral("#536173")));
         painter.drawText(
@@ -683,7 +683,7 @@ void BinGraphWidget::UpdateBinControls()
         checkBox->setChecked(!bin.mSuppressed);
         if (QGraphicsOpacityEffect* opacityEffect = qobject_cast<QGraphicsOpacityEffect*>(checkBox->graphicsEffect()))
         {
-            opacityEffect->setOpacity(bin.mAllocationCount == 0 ? 0.45 : 1.0);
+            opacityEffect->setOpacity(bin.mAllocationSizes.empty() ? 0.45 : 1.0);
         }
         checkBox->setGeometry(x, y, 18, 18);
     }
@@ -1142,9 +1142,10 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
     for (int row = 0; row < static_cast<int>(mCurrentBins.size()); row++)
     {
         const StreamedAllocationBin& bin = mCurrentBins[static_cast<std::size_t>(row)];
-        const std::size_t meanBytes = bin.mAllocationCount == 0
+        const std::size_t allocationCount = bin.mAllocationSizes.size();
+        const std::size_t meanBytes = allocationCount == 0
                                           ? 0
-                                          : bin.mAllocationBytes / bin.mAllocationCount;
+                                          : bin.mAllocationBytes / allocationCount;
         const std::size_t medianBytes = CalculateMedianAllocationSize(bin.mAllocationSizes);
 
         std::ostringstream rangeText;
@@ -1153,7 +1154,7 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
 
         QTableWidgetItem* rangeItem = new QTableWidgetItem(QString::fromStdString(rangeText.str()));
         QTableWidgetItem* countItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mAllocationCount)));
+            QString::fromStdString(BuildCommaSeparatedIntegerText(allocationCount)));
         QTableWidgetItem* bytesItem = new QTableWidgetItem(
             QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mAllocationBytes)));
         QTableWidgetItem* minimumItem = new QTableWidgetItem(
@@ -1173,7 +1174,7 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
         meanItem->setFlags(meanItem->flags() & ~Qt::ItemIsEditable);
         medianItem->setFlags(medianItem->flags() & ~Qt::ItemIsEditable);
 
-        if (bin.mAllocationCount == 0)
+        if (allocationCount == 0)
         {
             const QBrush emptyBinTextBrush(QColor(QStringLiteral("#9aa6b2")));
             rangeItem->setForeground(emptyBinTextBrush);
