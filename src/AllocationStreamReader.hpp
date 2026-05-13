@@ -68,6 +68,7 @@ struct StreamedAddressRange
 struct StreamedAllocationSummary
 {
     std::uint64_t mStreamPayloadSize = 0;
+    std::uint64_t mReaderProcessingMicroseconds = 0;
     std::uint64_t mAllocationCount = 0;
     std::uint64_t mAllocationBytes = 0;
     std::uint64_t mPageSize = 4096;

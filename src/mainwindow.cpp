@@ -29,6 +29,7 @@
 #include <QString>
 #include <QPushButton>
 #include <QShortcut>
+#include <QStatusBar>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabWidget>
@@ -37,6 +38,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <iomanip>
 #include <limits>
@@ -358,6 +360,39 @@ std::string BuildPercentageText(double ratio)
 
 
 //------------------------------------------------------------------------------
+// BuildDurationText
+//------------------------------------------------------------------------------
+//  Build compact text for an elapsed duration.
+//------------------------------------------------------------------------------
+std::string BuildDurationText(std::uint64_t microseconds)
+{
+    std::ostringstream output;
+    if (microseconds < 1000)
+    {
+        output << std::setw(7) << microseconds << " us";
+        return output.str();
+    }
+
+    output << std::fixed << std::setprecision(2) << std::setw(7)
+           << (static_cast<double>(microseconds) / 1000.0) << " ms";
+    return output.str();
+}
+
+
+//------------------------------------------------------------------------------
+// BuildBusyPercentageText
+//------------------------------------------------------------------------------
+//  Build fixed-width text for the recent processing duty cycle.
+//------------------------------------------------------------------------------
+std::string BuildBusyPercentageText(double busyPercentage)
+{
+    std::ostringstream output;
+    output << std::fixed << std::setprecision(1) << std::setw(5) << busyPercentage << "%";
+    return output.str();
+}
+
+
+//------------------------------------------------------------------------------
 // EnsureTableItem
 //------------------------------------------------------------------------------
 //  Return an existing table item or create it if this cell has not been used.
@@ -410,6 +445,112 @@ void SetTableRow(QTableWidget* tableWidget,
     tableWidget->setItem(row, 1, valueItem);
 }
 
+}
+
+
+//------------------------------------------------------------------------------
+// BusyIndicatorBar
+//------------------------------------------------------------------------------
+//  Construct the compact processing duty-cycle bar.
+//------------------------------------------------------------------------------
+BusyIndicatorBar::BusyIndicatorBar(QWidget* parent)
+    : QWidget(parent)
+{
+    setFixedSize(180, 12);
+    setToolTip(QStringLiteral("Reader, view update, and idle time since the previous summary."));
+}
+
+
+//------------------------------------------------------------------------------
+// SetTimings
+//------------------------------------------------------------------------------
+//  Update the duration values rendered by the processing duty-cycle bar.
+//------------------------------------------------------------------------------
+void BusyIndicatorBar::SetTimings(std::uint64_t readerMicroseconds,
+                                  std::uint64_t viewMicroseconds,
+                                  std::uint64_t idleMicroseconds,
+                                  bool hasTimingFrame)
+{
+    mReaderMicroseconds = readerMicroseconds;
+    mViewMicroseconds = viewMicroseconds;
+    mIdleMicroseconds = idleMicroseconds;
+    mHasTimingFrame = hasTimingFrame;
+    update();
+}
+
+
+//------------------------------------------------------------------------------
+// paintEvent
+//------------------------------------------------------------------------------
+//  Paint reader, view, and idle time as proportional horizontal segments.
+//------------------------------------------------------------------------------
+void BusyIndicatorBar::paintEvent(QPaintEvent* event)
+{
+    static_cast<void>(event);
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRect barRect = rect().adjusted(0, 2, 0, -2);
+    painter.setPen(QColor(QStringLiteral("#cfd8e3")));
+    painter.setBrush(QColor(QStringLiteral("#f8fafc")));
+    painter.drawRoundedRect(barRect, 2, 2);
+
+    if (!mHasTimingFrame)
+    {
+        return;
+    }
+
+    const std::uint64_t totalMicroseconds = mReaderMicroseconds + mViewMicroseconds + mIdleMicroseconds;
+    if (totalMicroseconds == 0)
+    {
+        return;
+    }
+
+    const std::array segmentColors = {
+        QColor(QStringLiteral("#ef4444")),
+        QColor(QStringLiteral("#f59e0b")),
+        QColor(QStringLiteral("#22c55e"))};
+    const std::array segmentValues = {
+        mReaderMicroseconds,
+        mViewMicroseconds,
+        mIdleMicroseconds};
+
+    int segmentLeft = barRect.left() + 1;
+    const int contentWidth = std::max(0, barRect.width() - 2);
+    const int contentTop = barRect.top() + 1;
+    const int contentHeight = std::max(0, barRect.height() - 2);
+    int usedWidth = 0;
+
+    painter.setPen(Qt::NoPen);
+    for (std::size_t segmentIndex = 0; segmentIndex < segmentValues.size(); segmentIndex++)
+    {
+        int segmentWidth = 0;
+        if (segmentIndex == (segmentValues.size() - 1))
+        {
+            segmentWidth = contentWidth - usedWidth;
+        }
+        else
+        {
+            segmentWidth = static_cast<int>(
+                (static_cast<double>(segmentValues[segmentIndex]) / static_cast<double>(totalMicroseconds)) *
+                static_cast<double>(contentWidth));
+            if ((segmentValues[segmentIndex] > 0) && (segmentWidth == 0))
+            {
+                segmentWidth = 1;
+            }
+        }
+
+        if (segmentWidth <= 0)
+        {
+            continue;
+        }
+
+        painter.setBrush(segmentColors[segmentIndex]);
+        painter.drawRect(QRect(segmentLeft, contentTop, segmentWidth, contentHeight));
+        segmentLeft += segmentWidth;
+        usedWidth += segmentWidth;
+    }
 }
 
 
@@ -774,6 +915,18 @@ MainWindow::MainWindow(QWidget* parent)
 
     layout->addWidget(mViewTabs, 1);
     setCentralWidget(centralWidget);
+
+    mBusyIndicatorBar = new BusyIndicatorBar(this);
+    statusBar()->addPermanentWidget(mBusyIndicatorBar);
+
+    mBusyIndicatorLabel = new QLabel(this);
+    mBusyIndicatorLabel->setObjectName(QStringLiteral("BusyIndicator"));
+    mBusyIndicatorLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    mBusyIndicatorLabel->setMinimumWidth(
+        mBusyIndicatorLabel->fontMetrics().horizontalAdvance(
+            QStringLiteral("Reader 999.99 ms | Views 999.99 ms | Idle 999.99 ms | Busy 100.0%")));
+    statusBar()->addPermanentWidget(mBusyIndicatorLabel);
+
     UpdateStreamingSummary({});
     CreateMenus();
 }
@@ -1005,8 +1158,72 @@ std::string MainWindow::BuildByteCountText(std::size_t byteCount) const
 //------------------------------------------------------------------------------
 void MainWindow::UpdateStreamingSummary(const StreamedAllocationSummary& summary)
 {
+    const auto viewUpdateStartTime = std::chrono::steady_clock::now();
+
     UpdateOverviewView(summary);
     UpdateBinsView(summary);
+
+    const std::uint64_t viewUpdateMicroseconds =
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - viewUpdateStartTime).count());
+    UpdateBusyIndicator(summary, viewUpdateMicroseconds, viewUpdateStartTime);
+}
+
+
+//------------------------------------------------------------------------------
+// UpdateBusyIndicator
+//------------------------------------------------------------------------------
+//  Show recent stream-reader and UI update timings in the status bar.
+//------------------------------------------------------------------------------
+void MainWindow::UpdateBusyIndicator(const StreamedAllocationSummary& summary,
+                                     std::uint64_t viewUpdateMicroseconds,
+                                     std::chrono::steady_clock::time_point updateStartTime)
+{
+    if (mBusyIndicatorLabel == nullptr)
+    {
+        return;
+    }
+
+    const std::uint64_t totalMicroseconds = summary.mReaderProcessingMicroseconds + viewUpdateMicroseconds;
+    std::uint64_t idleMicroseconds = 0;
+    QString idleText = QStringLiteral("     -- ms");
+    QString busyText = QStringLiteral(" --.-%");
+
+    if (mHasBusyIndicatorUpdateTime)
+    {
+        const std::uint64_t elapsedMicroseconds =
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    updateStartTime - mLastBusyIndicatorUpdateTime).count());
+        idleMicroseconds = (elapsedMicroseconds > totalMicroseconds) ? elapsedMicroseconds - totalMicroseconds : 0;
+        const double busyPercentage =
+            (elapsedMicroseconds > 0)
+                ? (static_cast<double>(totalMicroseconds) * 100.0) / static_cast<double>(elapsedMicroseconds)
+                : 0.0;
+
+        idleText = QString::fromStdString(BuildDurationText(idleMicroseconds));
+        busyText = QString::fromStdString(BuildBusyPercentageText(std::min(busyPercentage, 999.9)));
+    }
+
+    if (mBusyIndicatorBar != nullptr)
+    {
+        mBusyIndicatorBar->SetTimings(
+            summary.mReaderProcessingMicroseconds,
+            viewUpdateMicroseconds,
+            idleMicroseconds,
+            mHasBusyIndicatorUpdateTime);
+    }
+
+    mLastBusyIndicatorUpdateTime = updateStartTime;
+    mHasBusyIndicatorUpdateTime = true;
+
+    mBusyIndicatorLabel->setText(
+        tr("Reader %1 | Views %2 | Idle %3 | Busy %4")
+            .arg(QString::fromStdString(BuildDurationText(summary.mReaderProcessingMicroseconds)))
+            .arg(QString::fromStdString(BuildDurationText(viewUpdateMicroseconds)))
+            .arg(idleText)
+            .arg(busyText));
 }
 
 

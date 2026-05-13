@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -544,6 +545,8 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
 //------------------------------------------------------------------------------
 void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> data)
 {
+    const auto processingStartTime = std::chrono::steady_clock::now();
+
     // Sanity check on the given data buffer.
     if ((data.size() < SnapshotMagic.size()) ||
         (std::memcmp(data.data(), SnapshotMagic.data(), SnapshotMagic.size()) != 0))
@@ -647,6 +650,10 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
     StreamedAllocationSummary summary = BuildAllocationSummary(snapshot);
     // Record how many bytes it took to send this data from the preload.
     summary.mStreamPayloadSize = data.size();
+    summary.mReaderProcessingMicroseconds =
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - processingStartTime).count());
 
     // Pass the summary result to MainWindow::UpdateStreamingSummary().
     if (mSummaryHandler)
