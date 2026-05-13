@@ -80,11 +80,10 @@ struct StreamedAllocationSummary
     std::uint64_t mTrackedDeallocations = 0;
     std::uint64_t mUntrackedAllocations = 0;
     std::uint64_t mUntrackedDeallocations = 0;
-    std::array<std::uint64_t, StreamedTrackedAllocationTypeCount>
-        mTrackedAllocationsByType = {};
-    std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount>
-        mTrackedDeallocationsByType = {};
+    std::array<std::uint64_t, StreamedTrackedAllocationTypeCount> mTrackedAllocationsByType = {};
+    std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount> mTrackedDeallocationsByType = {};
     std::vector<StreamedAllocationBin> mBins;
+    std::vector<uint32_t> mHeatmap;
 };
 
 
@@ -138,7 +137,6 @@ private:
     void StreamingThreadMain(std::uintptr_t listenSocket);
     void ReceiveSocketFrame(std::uintptr_t clientSocket);
     void ParseStreamingData(std::span<const std::uint8_t> data, std::uint64_t socketReadMicroseconds);
-    void UpdateAddressRange(StreamedAddressRange& range, const StreamedAllocation& allocation) const;
     void AddAllocationToBin(std::vector<StreamedAllocationBin>& bins, const StreamedAllocation& allocation) const;
     void CalculateBinStatistics(StreamedAllocationBin& bin) const;
     [[nodiscard]] StreamedAllocationSummary BuildAllocationSummary(const StreamedHeapSnapshot& snapshot) const;

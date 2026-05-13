@@ -658,6 +658,13 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
         snapshot.mAllocations.push_back({static_cast<std::uintptr_t>(address), static_cast<std::size_t>(size), type});
     }
 
+    // Sort the allocations by address.
+    std::sort(snapshot.mAllocations.begin(), snapshot.mAllocations.end(),
+        [](const StreamedAllocation& left, const StreamedAllocation& right)
+        {
+            return left.mAddress < right.mAddress;
+        });
+
     // Make sure all the data was consumed correctly.
     if ((data.size() - offset != SnapshotFooter.size()) ||
         (std::memcmp(data.data() + offset, SnapshotFooter.data(), SnapshotFooter.size()) != 0))
@@ -681,35 +688,6 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
     if (mSummaryHandler)
     {
         mSummaryHandler(summary);
-    }
-}
-
-
-//------------------------------------------------------------------------------
-// UpdateAddressRange
-//------------------------------------------------------------------------------
-//  Fold a streamed allocation into an address range summary.
-//------------------------------------------------------------------------------
-void AllocationStreamReader::UpdateAddressRange(StreamedAddressRange& range, const StreamedAllocation& allocation) const
-{
-    const std::uintptr_t allocationEndAddress = allocation.mAddress + allocation.mSize;
-
-    if (!range.mHasAllocations)
-    {
-        range.mHasAllocations = true;
-        range.mLowestAddress = allocation.mAddress;
-        range.mHighestAddress = allocationEndAddress;
-    }
-    else
-    {
-        if (allocation.mAddress < range.mLowestAddress)
-        {
-            range.mLowestAddress = allocation.mAddress;
-        }
-        if (allocationEndAddress > range.mHighestAddress)
-        {
-            range.mHighestAddress = allocationEndAddress;
-        }
     }
 }
 
@@ -821,6 +799,14 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
     summary.mTrackedAllocationsByType = snapshot.mTrackedAllocationsByType;
     summary.mTrackedDeallocationsByType = snapshot.mTrackedDeallocationsByType;
 
+    // Set the Address ranges.
+    if (!snapshot.mAllocations.empty())
+    {
+        summary.mAddressRange.mHasAllocations = true;
+        summary.mAddressRange.mLowestAddress = snapshot.mAllocations.front().mAddress;
+        summary.mAddressRange.mHighestAddress = snapshot.mAllocations.back().mAddress + snapshot.mAllocations.back().mSize;
+    }
+
     // Track the range of pages covered by each allocation.
     std::vector<std::pair<std::uintptr_t, std::uintptr_t>> allocatedPageRanges;
     allocatedPageRanges.reserve(snapshot.mAllocations.size());
@@ -834,8 +820,6 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
             allocatedPageRanges.emplace_back(allocation.mAddress / pageSize, allocationEndAddress / pageSize);
         }
 
-        // Track the lowest and highest used memory addresses.
-        UpdateAddressRange(summary.mAddressRange, allocation);
         // Group allocations according to "bins", or power-of-two size ranges.
         AddAllocationToBin(summary.mBins, allocation);
     }
@@ -847,8 +831,8 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
     }
 
     // Count the number of pages "covered" by all the allocations.
-    // Start by sorting the page ranges.
-    std::sort(allocatedPageRanges.begin(), allocatedPageRanges.end());
+    // The allocations were sorted by address when parsed, so the generated
+    // page ranges are already sorted by start page.
     bool hasMergedPageRange = false;
     std::uintptr_t lastPageEnd = 0;
     // Walk the sorted page ranges, counting the number of covered pages.
