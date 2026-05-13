@@ -25,6 +25,14 @@
 namespace
 {
 
+#ifdef _WIN32
+using NativeSocket = SOCKET;
+constexpr NativeSocket InvalidSocket = INVALID_SOCKET;
+#else
+using NativeSocket = int;
+constexpr NativeSocket InvalidSocket = -1;
+#endif
+
 constexpr std::array<std::uint8_t, 8> SnapshotMagic = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
 constexpr std::array<std::uint8_t, 8> SnapshotFooter = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
 constexpr std::size_t SocketReadChunkSize = 0x10000; // 64kB
@@ -417,11 +425,11 @@ bool AllocationStreamReader::IsActive() const
 //------------------------------------------------------------------------------
 // ReceiveSocketFrame
 //------------------------------------------------------------------------------
-//  Read and parse one complete header/footer-delimited frame from a socket.
-//  Returns false if the socket fails to read.
+//  Read and parse serialized data from a socket.
 //------------------------------------------------------------------------------
-void AllocationStreamReader::ReceiveSocketFrame(NativeSocket clientSocket)
+void AllocationStreamReader::ReceiveSocketFrame(std::uintptr_t clientSocketValue)
 {
+    const NativeSocket clientSocket = ToNativeSocket(clientSocketValue);
     std::vector<std::uint8_t> bufferedData;
     std::size_t bufferedDataSize = 0;
 
@@ -458,15 +466,14 @@ void AllocationStreamReader::ReceiveSocketFrame(NativeSocket clientSocket)
 
         // Look for the header, throwing away any data that does not start with the Snapshot magic.
         bool foundHeader = false;
-        for (size_t i = 0; i < bufferedDataSize - SnapshotMagic.size(); i++)
+        for (size_t i = 0; i <= bufferedDataSize - SnapshotMagic.size(); i++)
         {
             if (memcmp(bufferedData.data() + i, SnapshotMagic.data(), SnapshotMagic.size()) == 0)
             {
                 // Found the header.  If it's not at the beginning, throw away any extra data.
                 if (i != 0)
                 {
-                    std::memmove(bufferedData.data(), bufferedData.data() + i, bufferedDataSize - i);
-                    bufferedDataSize -= i;
+                    ConsumeBufferedData(bufferedData, bufferedDataSize, i);
                 }
                 foundHeader = true;
                 break;
@@ -476,8 +483,7 @@ void AllocationStreamReader::ReceiveSocketFrame(NativeSocket clientSocket)
         // that could still be part of the (incomplete) header.
         if (!foundHeader)
         {
-            std::memmove(bufferedData.data(), bufferedData.data() + bufferedDataSize - (SnapshotMagic.size() - 1), (SnapshotMagic.size() - 1));
-            bufferedDataSize = (SnapshotMagic.size() - 1);
+            ConsumeBufferedData(bufferedData, bufferedDataSize, bufferedDataSize - (SnapshotMagic.size() - 1));
             continue;
         }
 
@@ -491,15 +497,22 @@ void AllocationStreamReader::ReceiveSocketFrame(NativeSocket clientSocket)
         std::size_t sizeOffset = SnapshotMagic.size();
         if (!ReadUInt64(std::span<const std::uint8_t>(bufferedData.data(), bufferedDataSize), sizeOffset, serializedFrameSize))
         {
-            // Fatal error.
-            return;
+            // Clear the buffer and try again.
+            bufferedDataSize = 0;
+            continue;
+        }
+        if (serializedFrameSize < MinimumSnapshotFrameSize)
+        {
+            // Clear the buffer and try again.
+            bufferedDataSize = 0;
+            continue;
         }
 
-        if (bufferedDataSize >= serializedFrameSize)
+        const std::size_t frameSize = static_cast<std::size_t>(serializedFrameSize);
+        if (bufferedDataSize >= frameSize)
         {
-            ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), serializedFrameSize));
-            ConsumeBufferedData(bufferedData, bufferedDataSize, serializedFrameSize);
-            continue;
+            ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), frameSize));
+            ConsumeBufferedData(bufferedData, bufferedDataSize, frameSize);
         }
     }
 }
@@ -532,7 +545,7 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
         // Read data until the socket fails to read (either due to an error,
         // the client disconnecting, or the thread stopping and the socket
         // being shut down).
-        ReceiveSocketFrame(clientSocket);
+        ReceiveSocketFrame(FromNativeSocket(clientSocket));
 
         const NativeSocket storedClientSocket = ToNativeSocket(
             mStreamingClientSocket.exchange(FromNativeSocket(InvalidSocket), std::memory_order_acq_rel));

@@ -12,14 +12,6 @@
 #include <thread>
 #include <vector>
 
-#ifdef _WIN32
-using NativeSocket = SOCKET;
-constexpr NativeSocket InvalidSocket = INVALID_SOCKET;
-#else
-using NativeSocket = int;
-constexpr NativeSocket InvalidSocket = -1;
-#endif
-
 struct StreamedAllocationBin
 {
     std::size_t mMinimumSize = 0;
@@ -114,7 +106,7 @@ public:
 
 private:
     void StreamingThreadMain(std::uintptr_t listenSocket);
-    void ReceiveSocketFrame(NativeSocket clientSocket);
+    void ReceiveSocketFrame(std::uintptr_t clientSocket);
     void ParseStreamingData(std::span<const std::uint8_t> data);
     void UpdateAddressRange(StreamedAddressRange& range, const StreamedAllocation& allocation) const;
     void AddAllocationToBin(std::vector<StreamedAllocationBin>& bins, const StreamedAllocation& allocation) const;
