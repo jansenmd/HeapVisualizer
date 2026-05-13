@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QBrush>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QDialog>
@@ -353,6 +354,26 @@ std::string BuildPercentageText(double ratio)
     std::ostringstream output;
     output << std::fixed << std::setprecision(2) << (ratio * 100.0) << "%";
     return output.str();
+}
+
+
+//------------------------------------------------------------------------------
+// EnsureTableItem
+//------------------------------------------------------------------------------
+//  Return an existing table item or create it if this cell has not been used.
+//------------------------------------------------------------------------------
+QTableWidgetItem* EnsureTableItem(QTableWidget* tableWidget, int row, int column)
+{
+    QTableWidgetItem* item = tableWidget->item(row, column);
+    if (item != nullptr)
+    {
+        return item;
+    }
+
+    item = new QTableWidgetItem();
+    item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+    tableWidget->setItem(row, column, item);
+    return item;
 }
 
 
@@ -1121,47 +1142,31 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
         rangeText << BuildBinLimitLabel(bin.mMinimumSize) << "-"
                   << BuildBinLimitLabel(bin.mMaximumSize);
 
-        QTableWidgetItem* rangeItem = new QTableWidgetItem(QString::fromStdString(rangeText.str()));
-        QTableWidgetItem* countItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(allocationCount)));
-        QTableWidgetItem* bytesItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mAllocationBytes)));
-        QTableWidgetItem* minimumItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMinimumAllocationSize)));
-        QTableWidgetItem* maximumItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMaximumAllocationSize)));
-        QTableWidgetItem* meanItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMeanAllocationSize)));
-        QTableWidgetItem* medianItem = new QTableWidgetItem(
-            QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMedianAllocationSize)));
+        QTableWidgetItem* rangeItem = EnsureTableItem(mBinsTable, row, 0);
+        QTableWidgetItem* countItem = EnsureTableItem(mBinsTable, row, 1);
+        QTableWidgetItem* bytesItem = EnsureTableItem(mBinsTable, row, 2);
+        QTableWidgetItem* minimumItem = EnsureTableItem(mBinsTable, row, 3);
+        QTableWidgetItem* maximumItem = EnsureTableItem(mBinsTable, row, 4);
+        QTableWidgetItem* meanItem = EnsureTableItem(mBinsTable, row, 5);
+        QTableWidgetItem* medianItem = EnsureTableItem(mBinsTable, row, 6);
 
-        rangeItem->setFlags(rangeItem->flags() & ~Qt::ItemIsEditable);
-        countItem->setFlags(countItem->flags() & ~Qt::ItemIsEditable);
-        bytesItem->setFlags(bytesItem->flags() & ~Qt::ItemIsEditable);
-        minimumItem->setFlags(minimumItem->flags() & ~Qt::ItemIsEditable);
-        maximumItem->setFlags(maximumItem->flags() & ~Qt::ItemIsEditable);
-        meanItem->setFlags(meanItem->flags() & ~Qt::ItemIsEditable);
-        medianItem->setFlags(medianItem->flags() & ~Qt::ItemIsEditable);
+        rangeItem->setText(QString::fromStdString(rangeText.str()));
+        countItem->setText(QString::fromStdString(BuildCommaSeparatedIntegerText(allocationCount)));
+        bytesItem->setText(QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mAllocationBytes)));
+        minimumItem->setText(QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMinimumAllocationSize)));
+        maximumItem->setText(QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMaximumAllocationSize)));
+        meanItem->setText(QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMeanAllocationSize)));
+        medianItem->setText(QString::fromStdString(BuildCommaSeparatedIntegerText(bin.mMedianAllocationSize)));
 
-        if (allocationCount == 0)
+        const QBrush itemTextBrush =
+            (allocationCount == 0)
+                ? QBrush(QColor(QStringLiteral("#9aa6b2")))
+                : mBinsTable->palette().brush(QPalette::Text);
+
+        for (QTableWidgetItem* item : {rangeItem, countItem, bytesItem, minimumItem, maximumItem, meanItem, medianItem})
         {
-            const QBrush emptyBinTextBrush(QColor(QStringLiteral("#9aa6b2")));
-            rangeItem->setForeground(emptyBinTextBrush);
-            countItem->setForeground(emptyBinTextBrush);
-            bytesItem->setForeground(emptyBinTextBrush);
-            minimumItem->setForeground(emptyBinTextBrush);
-            maximumItem->setForeground(emptyBinTextBrush);
-            meanItem->setForeground(emptyBinTextBrush);
-            medianItem->setForeground(emptyBinTextBrush);
+            item->setForeground(itemTextBrush);
         }
-
-        mBinsTable->setItem(row, 0, rangeItem);
-        mBinsTable->setItem(row, 1, countItem);
-        mBinsTable->setItem(row, 2, bytesItem);
-        mBinsTable->setItem(row, 3, minimumItem);
-        mBinsTable->setItem(row, 4, maximumItem);
-        mBinsTable->setItem(row, 5, meanItem);
-        mBinsTable->setItem(row, 6, medianItem);
     }
 
     mBinsTable->resizeRowsToContents();
