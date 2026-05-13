@@ -70,6 +70,7 @@ static AllocationPool gAllocationPool = {
 };
 static uint8_t gSnapshotSendBuffer[
     sizeof(SnapshotMagic) +                                         // header
+    sizeof(uint64_t) +                                              // total frame length
     (SNAPSHOT_POOL_COUNTER_COUNT * SNAPSHOT_COUNTER_BYTES) +        // counters
     (SNAPSHOT_PAGE_SIZE_BYTES) +                                    // page size
     (AllocationType_Count * SNAPSHOT_COUNTER_BYTES) +               // allocations by type
@@ -268,6 +269,30 @@ static bool AppendUInt64(uint8_t* buffer, size_t capacity, size_t* offset, uint6
 
 
 //------------------------------------------------------------------------------
+// WriteUInt64
+//------------------------------------------------------------------------------
+//  Write a 64-bit unsigned integer in little-endian byte order at an offset.
+//------------------------------------------------------------------------------
+static bool WriteUInt64(uint8_t* buffer, size_t capacity, size_t offset, uint64_t value)
+{
+    if ((offset > capacity) || (sizeof(uint64_t) > capacity - offset))
+    {
+        return false;
+    }
+
+    buffer[offset + 0] = (uint8_t)((value >>  0) & 0xFF);
+    buffer[offset + 1] = (uint8_t)((value >>  8) & 0xFF);
+    buffer[offset + 2] = (uint8_t)((value >> 16) & 0xFF);
+    buffer[offset + 3] = (uint8_t)((value >> 24) & 0xFF);
+    buffer[offset + 4] = (uint8_t)((value >> 32) & 0xFF);
+    buffer[offset + 5] = (uint8_t)((value >> 40) & 0xFF);
+    buffer[offset + 6] = (uint8_t)((value >> 48) & 0xFF);
+    buffer[offset + 7] = (uint8_t)((value >> 56) & 0xFF);
+    return true;
+}
+
+
+//------------------------------------------------------------------------------
 // SendSerializedAllocations
 //------------------------------------------------------------------------------
 //  Serialize tracked heap allocation state, then send it to a connected socket.
@@ -275,13 +300,19 @@ static bool AppendUInt64(uint8_t* buffer, size_t capacity, size_t* offset, uint6
 static bool SendSerializedAllocations(int fd)
 {
     size_t snapshotSize = 0;
+    size_t snapshotLengthOffset = 0;
 
     // Lock the allocation pool so we can serialize its content.
     LockPool(&gAllocationPool);
 
-    // Add the header and counters.
-    bool serialized =   AppendBytes(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, SnapshotMagic, sizeof(SnapshotMagic)) &&
-                        AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mAllocationCount) &&
+    // Add the header.
+    bool serialized =   AppendBytes(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, SnapshotMagic, sizeof(SnapshotMagic));
+    // Add a space for the total size of the transfer.
+    // This value will be written at the end.
+    snapshotLengthOffset = snapshotSize;
+    serialized &=       AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, 0);
+    // Add the counters.
+    serialized &=       AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mAllocationCount) &&
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mAllocationBytes) &&
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gSystemPageSize) &&
                         AppendUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, gAllocationPool.mTrackedAllocations) &&
@@ -314,6 +345,8 @@ static bool SendSerializedAllocations(int fd)
 
     // Add the footer.
     serialized &= AppendBytes(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), &snapshotSize, SnapshotFooter, sizeof(SnapshotFooter));
+    // Go back and write the total length of the buffer right after the header.
+    serialized &= WriteUInt64(gSnapshotSendBuffer, sizeof(gSnapshotSendBuffer), snapshotLengthOffset, (uint64_t)snapshotSize);
 
     // Unlock the pool when serialization is done and before we try to send the data.
     UnlockPool(&gAllocationPool);

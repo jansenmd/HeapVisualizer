@@ -25,18 +25,13 @@
 namespace
 {
 
-#ifdef _WIN32
-using NativeSocket = SOCKET;
-constexpr NativeSocket InvalidSocket = INVALID_SOCKET;
-#else
-using NativeSocket = int;
-constexpr NativeSocket InvalidSocket = -1;
-#endif
-
 constexpr std::array<std::uint8_t, 8> SnapshotMagic = {'H', 'V', 'I', 'Z', 'A', 'L', 'L', 'C'};
 constexpr std::array<std::uint8_t, 8> SnapshotFooter = {'H', 'V', 'I', 'Z', 'D', 'O', 'N', 'E'};
-constexpr std::size_t SocketReadChunkSize = 8192;
+constexpr std::size_t SocketReadChunkSize = 0x10000; // 64kB
 constexpr std::size_t DefaultAllocationPageSize = 4096;
+constexpr std::size_t SnapshotLengthSize = sizeof(std::uint64_t);
+constexpr std::size_t MinimumSnapshotFrameSize =
+    SnapshotMagic.size() + SnapshotLengthSize + SnapshotFooter.size();
 constexpr std::size_t BytePatternNotFound = std::numeric_limits<std::size_t>::max();
 constexpr std::size_t AllocationTypeCount =
     static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count);
@@ -61,35 +56,6 @@ std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType t
 bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type)
 {
     return OperationTypeIndex(type) < AllocationTypeCount;
-}
-
-
-//------------------------------------------------------------------------------
-// FindBytePattern
-//------------------------------------------------------------------------------
-//  Find a byte pattern in a byte buffer starting at the provided offset.
-//------------------------------------------------------------------------------
-std::size_t FindBytePattern(const std::vector<std::uint8_t>& data,
-                            std::size_t validSize,
-                            const std::array<std::uint8_t, 8>& pattern,
-                            std::size_t offset)
-{
-    if ((validSize > data.size()) ||
-        (offset > validSize) ||
-        (pattern.size() > (validSize - offset)))
-    {
-        return BytePatternNotFound;
-    }
-
-    const auto searchBegin = data.begin() + static_cast<std::ptrdiff_t>(offset);
-    const auto searchEnd = data.begin() + static_cast<std::ptrdiff_t>(validSize);
-    const auto patternIterator = std::search(searchBegin, searchEnd, pattern.begin(), pattern.end());
-    if (patternIterator == searchEnd)
-    {
-        return BytePatternNotFound;
-    }
-
-    return static_cast<std::size_t>(std::distance(data.begin(), patternIterator));
 }
 
 
@@ -454,66 +420,87 @@ bool AllocationStreamReader::IsActive() const
 //  Read and parse one complete header/footer-delimited frame from a socket.
 //  Returns false if the socket fails to read.
 //------------------------------------------------------------------------------
-bool AllocationStreamReader::ReceiveSocketFrame(std::uintptr_t clientSocketValue,
-                                                std::vector<std::uint8_t>& bufferedData,
-                                                std::size_t& bufferedDataSize)
+void AllocationStreamReader::ReceiveSocketFrame(NativeSocket clientSocket)
 {
-    const NativeSocket clientSocket = ToNativeSocket(clientSocketValue);
+    std::vector<std::uint8_t> bufferedData;
+    std::size_t bufferedDataSize = 0;
 
+    // Read from the socket until an error occurs or it is shut down.
     while (true)
     {
-        const std::size_t headerOffset = FindBytePattern(bufferedData, bufferedDataSize, SnapshotMagic, 0);
-        if (headerOffset != BytePatternNotFound)
-        {
-            if (headerOffset != 0)
-            {
-                ConsumeBufferedData(bufferedData, bufferedDataSize, headerOffset);
-            }
-
-            const std::size_t footerOffset = FindBytePattern(
-                bufferedData,
-                bufferedDataSize,
-                SnapshotFooter,
-                SnapshotMagic.size());
-            if (footerOffset != BytePatternNotFound)
-            {
-                const std::size_t frameSize = footerOffset + SnapshotFooter.size();
-                ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), frameSize));
-                ConsumeBufferedData(bufferedData, bufferedDataSize, frameSize);
-                return true;
-            }
-        }
-        else if (bufferedDataSize > SnapshotMagic.size())
-        {
-            const std::size_t bytesToKeep = SnapshotMagic.size() - 1;
-            std::move(
-                bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize - bytesToKeep),
-                bufferedData.begin() + static_cast<std::ptrdiff_t>(bufferedDataSize),
-                bufferedData.begin());
-            bufferedDataSize = bytesToKeep;
-        }
-
+        // If there's less than SocketReadChunkSize bytes available to read
+        // into in the buffer, grow it by an additional SocketReadChunkSize
+        // bytes.
         if ((bufferedData.size() - bufferedDataSize) < SocketReadChunkSize)
         {
-            bufferedData.resize(bufferedDataSize + SocketReadChunkSize);
+            bufferedData.resize(bufferedData.size() + SocketReadChunkSize);
         }
 
+        // Read the data from the socket.
 #ifdef _WIN32
-        const int bytesRead = recv(
-            clientSocket,
-            reinterpret_cast<char*>(bufferedData.data() + bufferedDataSize),
-            static_cast<int>(SocketReadChunkSize),
-            0);
+        const int bytesRead = recv(clientSocket, reinterpret_cast<char*>(bufferedData.data() + bufferedDataSize), static_cast<int>(bufferedData.size() - bufferedDataSize), 0);
 #else
-        const ssize_t bytesRead = recv(clientSocket, bufferedData.data() + bufferedDataSize, SocketReadChunkSize, 0);
+        const ssize_t bytesRead = recv(clientSocket, bufferedData.data() + bufferedDataSize, bufferedData.size() - bufferedDataSize, 0);
 #endif
         // Something is wrong with the socket, time to return.
         if (bytesRead <= 0)
         {
-            return false;
+            return;
+        }
+        // Update how much data is in the buffer.
+        bufferedDataSize += static_cast<std::size_t>(bytesRead);
+
+        // Must at least have magic to parse.
+        if (bufferedDataSize < SnapshotMagic.size())
+        {
+            continue;
         }
 
-        bufferedDataSize += static_cast<std::size_t>(bytesRead);
+        // Look for the header, throwing away any data that does not start with the Snapshot magic.
+        bool foundHeader = false;
+        for (size_t i = 0; i < bufferedDataSize - SnapshotMagic.size(); i++)
+        {
+            if (memcmp(bufferedData.data() + i, SnapshotMagic.data(), SnapshotMagic.size()) == 0)
+            {
+                // Found the header.  If it's not at the beginning, throw away any extra data.
+                if (i != 0)
+                {
+                    std::memmove(bufferedData.data(), bufferedData.data() + i, bufferedDataSize - i);
+                    bufferedDataSize -= i;
+                }
+                foundHeader = true;
+                break;
+            }
+        }
+        // If the header wasn't found, throw away all but the last few bytes
+        // that could still be part of the (incomplete) header.
+        if (!foundHeader)
+        {
+            std::memmove(bufferedData.data(), bufferedData.data() + bufferedDataSize - (SnapshotMagic.size() - 1), (SnapshotMagic.size() - 1));
+            bufferedDataSize = (SnapshotMagic.size() - 1);
+            continue;
+        }
+
+        // Enough data for the length?
+        if (bufferedDataSize < SnapshotMagic.size() + SnapshotLengthSize)
+        {
+            continue;
+        }
+        // Get the length.
+        std::uint64_t serializedFrameSize = 0;
+        std::size_t sizeOffset = SnapshotMagic.size();
+        if (!ReadUInt64(std::span<const std::uint8_t>(bufferedData.data(), bufferedDataSize), sizeOffset, serializedFrameSize))
+        {
+            // Fatal error.
+            return;
+        }
+
+        if (bufferedDataSize >= serializedFrameSize)
+        {
+            ParseStreamingData(std::span<const std::uint8_t>(bufferedData.data(), serializedFrameSize));
+            ConsumeBufferedData(bufferedData, bufferedDataSize, serializedFrameSize);
+            continue;
+        }
     }
 }
 
@@ -541,19 +528,11 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
 
         // Store the new socket so we can stop it by shutting down this socket.
         mStreamingClientSocket.store(FromNativeSocket(clientSocket), std::memory_order_release);
-        std::vector<std::uint8_t> bufferedData;
-        std::size_t bufferedDataSize = 0;
+
         // Read data until the socket fails to read (either due to an error,
         // the client disconnecting, or the thread stopping and the socket
         // being shut down).
-        while (true)
-        {
-            // Returns false if the socket cannot be read from.
-            if (!ReceiveSocketFrame(FromNativeSocket(clientSocket), bufferedData, bufferedDataSize))
-            {
-                break;
-            }
-        }
+        ReceiveSocketFrame(clientSocket);
 
         const NativeSocket storedClientSocket = ToNativeSocket(
             mStreamingClientSocket.exchange(FromNativeSocket(InvalidSocket), std::memory_order_acq_rel));
@@ -582,6 +561,13 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
     }
 
     offset += SnapshotMagic.size();
+
+    std::uint64_t serializedFrameSize = 0;
+    if ((!ReadUInt64(data, offset, serializedFrameSize)) ||
+        (serializedFrameSize != static_cast<std::uint64_t>(data.size())))
+    {
+        return;
+    }
 
     std::uint64_t allocationCount = 0;
     std::uint64_t allocationBytes = 0;
