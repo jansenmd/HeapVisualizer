@@ -45,12 +45,15 @@ constexpr std::size_t AllocationTypeCount =
     static_cast<std::size_t>(HeapVisualizer::AllocationHooks::AllocationType::Count);
 
 
+}
+
+
 //------------------------------------------------------------------------------
 // OperationTypeIndex
 //------------------------------------------------------------------------------
 //  Convert an allocation operation type into a count-array index.
 //------------------------------------------------------------------------------
-std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType type)
+std::size_t AllocationStreamReader::OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType type)
 {
     return static_cast<std::size_t>(type);
 }
@@ -61,7 +64,7 @@ std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType t
 //------------------------------------------------------------------------------
 //  Return whether an allocation operation type is inside the known range.
 //------------------------------------------------------------------------------
-bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type)
+bool AllocationStreamReader::IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type)
 {
     return OperationTypeIndex(type) < AllocationTypeCount;
 }
@@ -72,9 +75,9 @@ bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type)
 //------------------------------------------------------------------------------
 //  Remove consumed bytes from the front of the valid buffered data range.
 //------------------------------------------------------------------------------
-void ConsumeBufferedData(std::vector<std::uint8_t>& bufferedData,
-                         std::size_t& bufferedDataSize,
-                         std::size_t bytesToConsume)
+void AllocationStreamReader::ConsumeBufferedData(std::vector<std::uint8_t>& bufferedData,
+                                                 std::size_t& bufferedDataSize,
+                                                 std::size_t bytesToConsume)
 {
     if (bytesToConsume >= bufferedDataSize)
     {
@@ -91,33 +94,13 @@ void ConsumeBufferedData(std::vector<std::uint8_t>& bufferedData,
 
 
 //------------------------------------------------------------------------------
-// ToNativeSocket
-//------------------------------------------------------------------------------
-//  Convert an integer storage value back to a native socket handle.
-//------------------------------------------------------------------------------
-NativeSocket ToNativeSocket(std::uintptr_t socketValue)
-{
-    return static_cast<NativeSocket>(socketValue);
-}
-
-
-//------------------------------------------------------------------------------
-// FromNativeSocket
-//------------------------------------------------------------------------------
-//  Convert a native socket handle into integer storage.
-//------------------------------------------------------------------------------
-std::uintptr_t FromNativeSocket(NativeSocket socketValue)
-{
-    return static_cast<std::uintptr_t>(socketValue);
-}
-
-
-//------------------------------------------------------------------------------
 // ReadUInt32
 //------------------------------------------------------------------------------
 //  Read a 32-bit little-endian unsigned integer from a binary buffer.
 //------------------------------------------------------------------------------
-bool ReadUInt32(std::span<const std::uint8_t> data, std::size_t& offset, std::uint32_t& value)
+bool AllocationStreamReader::ReadUInt32(std::span<const std::uint8_t> data,
+                                        std::size_t& offset,
+                                        std::uint32_t& value)
 {
     if ((offset > data.size()) || ((data.size() - offset) < sizeof(std::uint32_t)))
     {
@@ -138,7 +121,9 @@ bool ReadUInt32(std::span<const std::uint8_t> data, std::size_t& offset, std::ui
 //------------------------------------------------------------------------------
 //  Read a 64-bit little-endian unsigned integer from a binary buffer.
 //------------------------------------------------------------------------------
-bool ReadUInt64(std::span<const std::uint8_t> data, std::size_t& offset, std::uint64_t& value)
+bool AllocationStreamReader::ReadUInt64(std::span<const std::uint8_t> data,
+                                        std::size_t& offset,
+                                        std::uint64_t& value)
 {
     if ((offset > data.size()) || ((data.size() - offset) < sizeof(std::uint64_t)))
     {
@@ -161,7 +146,7 @@ bool ReadUInt64(std::span<const std::uint8_t> data, std::size_t& offset, std::ui
 //------------------------------------------------------------------------------
 //  Return a portable string for the last socket error.
 //------------------------------------------------------------------------------
-std::string LastSocketError()
+std::string AllocationStreamReader::LastSocketError()
 {
 #ifdef _WIN32
     return std::system_category().message(WSAGetLastError());
@@ -176,7 +161,7 @@ std::string LastSocketError()
 //------------------------------------------------------------------------------
 //  Initialize the platform socket subsystem.
 //------------------------------------------------------------------------------
-bool InitializeSockets(std::string& errorMessage)
+bool AllocationStreamReader::InitializeSockets(std::string& errorMessage)
 {
 #ifdef _WIN32
     WSADATA data = {};
@@ -198,7 +183,7 @@ bool InitializeSockets(std::string& errorMessage)
 //------------------------------------------------------------------------------
 //  Shut down the platform socket subsystem.
 //------------------------------------------------------------------------------
-void ShutdownSockets()
+void AllocationStreamReader::ShutdownSockets()
 {
 #ifdef _WIN32
     WSACleanup();
@@ -211,8 +196,9 @@ void ShutdownSockets()
 //------------------------------------------------------------------------------
 //  Close a native socket handle.
 //------------------------------------------------------------------------------
-void CloseSocket(NativeSocket socketValue)
+void AllocationStreamReader::CloseSocket(std::uintptr_t socketStorage)
 {
+    const NativeSocket socketValue = static_cast<NativeSocket>(socketStorage);
     if (socketValue == InvalidSocket)
     {
         return;
@@ -231,8 +217,9 @@ void CloseSocket(NativeSocket socketValue)
 //------------------------------------------------------------------------------
 //  Shut down socket operations to wake blocking accept or receive calls.
 //------------------------------------------------------------------------------
-void ShutdownSocket(NativeSocket socketValue)
+void AllocationStreamReader::ShutdownSocket(std::uintptr_t socketStorage)
 {
+    const NativeSocket socketValue = static_cast<NativeSocket>(socketStorage);
     if (socketValue == InvalidSocket)
     {
         return;
@@ -251,13 +238,15 @@ void ShutdownSocket(NativeSocket socketValue)
 //------------------------------------------------------------------------------
 //  Create, bind, and listen on a native TCP socket.
 //------------------------------------------------------------------------------
-NativeSocket CreateListenSocket(const std::string& addressText, std::uint16_t port, std::string& errorMessage)
+std::uintptr_t AllocationStreamReader::CreateListenSocket(const std::string& addressText,
+                                                          std::uint16_t port,
+                                                          std::string& errorMessage)
 {
     NativeSocket listenSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (listenSocket == InvalidSocket)
     {
         errorMessage = LastSocketError();
-        return InvalidSocket;
+        return static_cast<std::uintptr_t>(InvalidSocket);
     }
 
     int reuseAddress = 1;
@@ -275,28 +264,25 @@ NativeSocket CreateListenSocket(const std::string& addressText, std::uint16_t po
     if (inet_pton(AF_INET, addressText.c_str(), &address.sin_addr) != 1)
     {
         errorMessage = "Invalid IPv4 address.";
-        CloseSocket(listenSocket);
-        return InvalidSocket;
+        CloseSocket(static_cast<std::uintptr_t>(listenSocket));
+        return static_cast<std::uintptr_t>(InvalidSocket);
     }
 
     if (bind(listenSocket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
     {
         errorMessage = LastSocketError();
-        CloseSocket(listenSocket);
-        return InvalidSocket;
+        CloseSocket(static_cast<std::uintptr_t>(listenSocket));
+        return static_cast<std::uintptr_t>(InvalidSocket);
     }
 
     if (listen(listenSocket, 8) != 0)
     {
         errorMessage = LastSocketError();
-        CloseSocket(listenSocket);
-        return InvalidSocket;
+        CloseSocket(static_cast<std::uintptr_t>(listenSocket));
+        return static_cast<std::uintptr_t>(InvalidSocket);
     }
 
-    return listenSocket;
-}
-
-
+    return static_cast<std::uintptr_t>(listenSocket);
 }
 
 
@@ -354,14 +340,14 @@ bool AllocationStreamReader::Start(const std::string& address, std::uint16_t por
     }
 
     // Create the socket.
-    const NativeSocket listenSocket = CreateListenSocket(address, port, errorMessage);
-    if (listenSocket == InvalidSocket)
+    const std::uintptr_t listenSocket = CreateListenSocket(address, port, errorMessage);
+    if (listenSocket == static_cast<std::uintptr_t>(InvalidSocket))
     {
         ShutdownSockets();
         return false;
     }
-    mStreamingListenSocket.store(FromNativeSocket(listenSocket), std::memory_order_release);
-    mStreamingClientSocket.store(FromNativeSocket(InvalidSocket), std::memory_order_release);
+    mStreamingListenSocket.store(listenSocket, std::memory_order_release);
+    mStreamingClientSocket.store(static_cast<std::uintptr_t>(InvalidSocket), std::memory_order_release);
 
     // Record that we're now streaming.
     mStreamingActive.store(true, std::memory_order_release);
@@ -369,7 +355,7 @@ bool AllocationStreamReader::Start(const std::string& address, std::uint16_t por
     // Create the thread to read from the socket and parse the data.
     mStreamingThread = std::thread([this, listenSocket]
     {
-        StreamingThreadMain(FromNativeSocket(listenSocket));
+        StreamingThreadMain(listenSocket);
     });
 
     return true;
@@ -392,11 +378,13 @@ void AllocationStreamReader::Stop()
 
     // Close the listening socket first so the reader cannot accept a new client
     // after the current client socket is interrupted.
-    const NativeSocket listenSocket = ToNativeSocket(mStreamingListenSocket.exchange(FromNativeSocket(InvalidSocket), std::memory_order_acq_rel));
+    const std::uintptr_t listenSocket =
+        mStreamingListenSocket.exchange(static_cast<std::uintptr_t>(InvalidSocket), std::memory_order_acq_rel);
     ShutdownSocket(listenSocket);
     CloseSocket(listenSocket);
 
-    const NativeSocket clientSocket = ToNativeSocket(mStreamingClientSocket.exchange(FromNativeSocket(InvalidSocket), std::memory_order_acq_rel));
+    const std::uintptr_t clientSocket =
+        mStreamingClientSocket.exchange(static_cast<std::uintptr_t>(InvalidSocket), std::memory_order_acq_rel);
     ShutdownSocket(clientSocket);
     CloseSocket(clientSocket);
 
@@ -429,7 +417,7 @@ bool AllocationStreamReader::IsActive() const
 //------------------------------------------------------------------------------
 void AllocationStreamReader::ReceiveSocketFrame(std::uintptr_t clientSocketValue)
 {
-    const NativeSocket clientSocket = ToNativeSocket(clientSocketValue);
+    const NativeSocket clientSocket = static_cast<NativeSocket>(clientSocketValue);
     std::vector<std::uint8_t> bufferedData;
     std::size_t bufferedDataSize = 0;
 
@@ -525,7 +513,7 @@ void AllocationStreamReader::ReceiveSocketFrame(std::uintptr_t clientSocketValue
 //------------------------------------------------------------------------------
 void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValue)
 {
-    const NativeSocket listenSocket = ToNativeSocket(listenSocketValue);
+    const NativeSocket listenSocket = static_cast<NativeSocket>(listenSocketValue);
 
     // Check to see if it's time to stop.
     while (mStreamingActive.load(std::memory_order_acquire))
@@ -540,16 +528,16 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
         }
 
         // Store the new socket so we can stop it by shutting down this socket.
-        mStreamingClientSocket.store(FromNativeSocket(clientSocket), std::memory_order_release);
+        mStreamingClientSocket.store(static_cast<std::uintptr_t>(clientSocket), std::memory_order_release);
 
         // Read data until the socket fails to read (either due to an error,
         // the client disconnecting, or the thread stopping and the socket
         // being shut down).
-        ReceiveSocketFrame(FromNativeSocket(clientSocket));
+        ReceiveSocketFrame(static_cast<std::uintptr_t>(clientSocket));
 
-        const NativeSocket storedClientSocket = ToNativeSocket(
-            mStreamingClientSocket.exchange(FromNativeSocket(InvalidSocket), std::memory_order_acq_rel));
-        if (storedClientSocket != InvalidSocket)
+        const std::uintptr_t storedClientSocket =
+            mStreamingClientSocket.exchange(static_cast<std::uintptr_t>(InvalidSocket), std::memory_order_acq_rel);
+        if (storedClientSocket != static_cast<std::uintptr_t>(InvalidSocket))
         {
             CloseSocket(storedClientSocket);
         }
@@ -564,53 +552,50 @@ void AllocationStreamReader::StreamingThreadMain(std::uintptr_t listenSocketValu
 //------------------------------------------------------------------------------
 void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> data)
 {
-    StreamedHeapSnapshot snapshot;
-    std::size_t offset = 0;
-
+    // Sanity check on the given data buffer.
     if ((data.size() < SnapshotMagic.size()) ||
         (std::memcmp(data.data(), SnapshotMagic.data(), SnapshotMagic.size()) != 0))
     {
+        // Invalid input!
         return;
     }
 
-    offset += SnapshotMagic.size();
+    // Skip the magic header.
+    std::size_t offset = SnapshotMagic.size();
 
+    // Extract the size of the entire frame and validate the size of the buffer.
     std::uint64_t serializedFrameSize = 0;
     if ((!ReadUInt64(data, offset, serializedFrameSize)) ||
         (serializedFrameSize != static_cast<std::uint64_t>(data.size())))
     {
+        // Invalid size!
         return;
     }
 
-    std::uint64_t allocationCount = 0;
-    std::uint64_t allocationBytes = 0;
-    std::uint64_t pageSize = 0;
-    std::uint64_t trackedAllocations = 0;
-    std::uint64_t trackedDeallocations = 0;
-    std::uint64_t untrackedAllocations = 0;
-    std::uint64_t untrackedDeallocations = 0;
 
-    if ((!ReadUInt64(data, offset, allocationCount)) ||
-        (!ReadUInt64(data, offset, allocationBytes)) ||
-        (!ReadUInt64(data, offset, pageSize)) ||
-        (!ReadUInt64(data, offset, trackedAllocations)) ||
-        (!ReadUInt64(data, offset, trackedDeallocations)) ||
-        (!ReadUInt64(data, offset, untrackedAllocations)) ||
-        (!ReadUInt64(data, offset, untrackedDeallocations)))
+    // Extract the various counts and page size.
+    StreamedHeapSnapshot snapshot;
+    if ((!ReadUInt64(data, offset, snapshot.mAllocationCount)) ||
+        (!ReadUInt64(data, offset, snapshot.mAllocationBytes)) ||
+        (!ReadUInt64(data, offset, snapshot.mPageSize)) ||
+        (!ReadUInt64(data, offset, snapshot.mTrackedAllocations)) ||
+        (!ReadUInt64(data, offset, snapshot.mTrackedDeallocations)) ||
+        (!ReadUInt64(data, offset, snapshot.mUntrackedAllocations)) ||
+        (!ReadUInt64(data, offset, snapshot.mUntrackedDeallocations)))
     {
         return;
     }
 
-    snapshot.mAllocationCount = static_cast<std::size_t>(allocationCount);
-    snapshot.mAllocationBytes = static_cast<std::size_t>(allocationBytes);
-    snapshot.mHasPageSize = pageSize > 0;
-    snapshot.mPageSize = (pageSize > 0)
-                             ? static_cast<std::size_t>(pageSize)
-                             : DefaultAllocationPageSize;
-    snapshot.mTrackedAllocations = static_cast<std::uint64_t>(trackedAllocations);
-    snapshot.mTrackedDeallocations = static_cast<std::uint64_t>(trackedDeallocations);
-    snapshot.mUntrackedAllocations = static_cast<std::uint64_t>(untrackedAllocations);
-    snapshot.mUntrackedDeallocations = static_cast<std::uint64_t>(untrackedDeallocations);
+    // Track the page size stats.
+    if (snapshot.mPageSize > 0)
+    {
+        snapshot.mHasPageSize = true;
+    }
+    else
+    {
+        snapshot.mHasPageSize = false;
+        snapshot.mPageSize = DefaultAllocationPageSize;
+    }
 
     for (std::size_t typeIndex = 0; typeIndex < AllocationTypeCount; typeIndex++)
     {
@@ -619,7 +604,6 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
         {
             return;
         }
-
         snapshot.mTrackedAllocationsByType[typeIndex] = static_cast<std::uint64_t>(typeCount);
     }
 
@@ -630,11 +614,10 @@ void AllocationStreamReader::ParseStreamingData(std::span<const std::uint8_t> da
         {
             return;
         }
-
         snapshot.mTrackedDeallocationsByType[typeIndex] = static_cast<std::uint64_t>(typeCount);
     }
 
-    for (std::uint64_t allocationIndex = 0; allocationIndex < allocationCount; allocationIndex++)
+    for (std::uint64_t allocationIndex = 0; allocationIndex < snapshot.mAllocationCount; allocationIndex++)
     {
         std::uint64_t address = 0;
         std::uint64_t size = 0;

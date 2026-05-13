@@ -35,9 +35,9 @@ struct StreamedAllocation
 struct StreamedHeapSnapshot
 {
     std::vector<StreamedAllocation> mAllocations;
-    std::size_t mAllocationCount = 0;
-    std::size_t mAllocationBytes = 0;
-    std::size_t mPageSize = 4096;
+    std::uint64_t mAllocationCount = 0;
+    std::uint64_t mAllocationBytes = 0;
+    std::uint64_t mPageSize = 4096;
     bool mHasPageSize = false;
     std::uint64_t mTrackedAllocations = 0;
     std::uint64_t mTrackedDeallocations = 0;
@@ -105,6 +105,26 @@ public:
     bool IsActive() const;
 
 private:
+    [[nodiscard]] static std::size_t OperationTypeIndex(HeapVisualizer::AllocationHooks::AllocationType type);
+    [[nodiscard]] static bool IsValidOperationType(HeapVisualizer::AllocationHooks::AllocationType type);
+    static void ConsumeBufferedData(std::vector<std::uint8_t>& bufferedData,
+                                    std::size_t& bufferedDataSize,
+                                    std::size_t bytesToConsume);
+    [[nodiscard]] static bool ReadUInt32(std::span<const std::uint8_t> data,
+                                         std::size_t& offset,
+                                         std::uint32_t& value);
+    [[nodiscard]] static bool ReadUInt64(std::span<const std::uint8_t> data,
+                                         std::size_t& offset,
+                                         std::uint64_t& value);
+    [[nodiscard]] static std::string LastSocketError();
+    [[nodiscard]] static bool InitializeSockets(std::string& errorMessage);
+    static void ShutdownSockets();
+    static void CloseSocket(std::uintptr_t socketValue);
+    static void ShutdownSocket(std::uintptr_t socketValue);
+    [[nodiscard]] static std::uintptr_t CreateListenSocket(const std::string& addressText,
+                                                           std::uint16_t port,
+                                                           std::string& errorMessage);
+
     void StreamingThreadMain(std::uintptr_t listenSocket);
     void ReceiveSocketFrame(std::uintptr_t clientSocket);
     void ParseStreamingData(std::span<const std::uint8_t> data);
