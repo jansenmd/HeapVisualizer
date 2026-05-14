@@ -16,8 +16,10 @@
 
 class QAction;
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QPaintEvent;
+class QPushButton;
 class QResizeEvent;
 class QScrollArea;
 class QTableWidget;
@@ -29,7 +31,7 @@ class HeatmapImageWidget : public QWidget
 public:
     explicit HeatmapImageWidget(QWidget* parent = nullptr);
 
-    void SetHeatmap(const std::vector<std::uint32_t>& pixels);
+    void SetHeatmap(const std::vector<std::uint32_t>& pixels, std::uint64_t bytesPerPixel);
     void SetDimensionsLabel(QLabel* label);
     void SetRowBytesLabel(QLabel* label);
 
@@ -51,6 +53,7 @@ private:
     QImage mImage;
     QLabel* mDimensionsLabel = nullptr;
     QLabel* mRowBytesLabel = nullptr;
+    std::uint64_t mBytesPerPixel = DefaultHeatmapBytesPerPixel;
     std::size_t mImagePixelsPerRow = 0;
 };
 
@@ -120,6 +123,7 @@ private:
     void UpdateOverviewView(const StreamedAllocationSummary& summary);
     void UpdateBinsView(const StreamedAllocationSummary& summary);
     void UpdateHeatmapView(const StreamedAllocationSummary& summary);
+    void UpdateHeatmapSettings();
     void UpdateSuppressedBinState(std::size_t minimumSize, std::size_t maximumSize, bool suppressed);
     void ShowAboutDialog();
 
@@ -133,11 +137,17 @@ private:
     QScrollArea* mHeatmapScrollArea = nullptr;
     QWidget* mHeatmapContentWidget = nullptr;
     QVBoxLayout* mHeatmapLayout = nullptr;
+    QComboBox* mHeatmapBytesPerPixelComboBox = nullptr;
+    QComboBox* mHeatmapGroupGapComboBox = nullptr;
+    QPushButton* mHeatmapUnusedColorButton = nullptr;
+    QPushButton* mHeatmapUsedColorButton = nullptr;
     BusyIndicatorBar* mBusyIndicatorBar = nullptr;
     QLabel* mBusyIndicatorLabel = nullptr;
     AllocationStreamReader mAllocationStreamReader;
     std::vector<StreamedAllocationBin> mCurrentBins;
     std::set<std::pair<std::size_t, std::size_t>> mSuppressedBins;
+    std::uint32_t mHeatmapUnusedColor = DefaultHeatmapUnusedColor;
+    std::uint32_t mHeatmapUsedColor = DefaultHeatmapUsedColor;
     std::chrono::steady_clock::time_point mLastBusyIndicatorUpdateTime;
     bool mHasBusyIndicatorUpdateTime = false;
 };

@@ -17,6 +17,10 @@ constexpr std::size_t StreamedTrackedAllocationTypeCount =
     static_cast<std::size_t>(HeapVisualizer::AllocationHooks::TrackedAllocationType::Count);
 constexpr std::size_t StreamedTrackedDeallocationTypeCount =
     static_cast<std::size_t>(HeapVisualizer::AllocationHooks::TrackedDeallocationType::Count);
+constexpr std::uint64_t DefaultHeatmapBytesPerPixel = 256;
+constexpr std::uint64_t DefaultHeatmapGroupGapBytes = 0x100000;
+constexpr std::uint32_t DefaultHeatmapUnusedColor = 0xFF000000;
+constexpr std::uint32_t DefaultHeatmapUsedColor = 0xFF00FF00;
 
 struct StreamedAllocationBin
 {
@@ -90,6 +94,10 @@ struct StreamedAllocationSummary
     std::uint64_t mUntrackedDeallocations = 0;
     std::array<std::uint64_t, StreamedTrackedAllocationTypeCount> mTrackedAllocationsByType = {};
     std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount> mTrackedDeallocationsByType = {};
+    std::uint64_t mHeatmapBytesPerPixel = DefaultHeatmapBytesPerPixel;
+    std::uint64_t mHeatmapGroupGapBytes = DefaultHeatmapGroupGapBytes;
+    std::uint32_t mHeatmapUnusedColor = DefaultHeatmapUnusedColor;
+    std::uint32_t mHeatmapUsedColor = DefaultHeatmapUsedColor;
     std::vector<StreamedAllocationBin> mBins;
     std::vector<StreamedAllocationGroup> mAllocationGroups;
     std::vector<std::vector<std::uint32_t>> mHeatmaps;
@@ -116,6 +124,10 @@ public:
 
     // Set the callback to display the latest summary in the UI.
     void SetSummaryHandler(SummaryHandler handler);
+    void SetHeatmapSettings(std::uint64_t bytesPerPixel,
+                            std::uint64_t groupGapBytes,
+                            std::uint32_t unusedColor,
+                            std::uint32_t usedColor);
 
     // Start and stop streaming.
     bool Start(const std::string& address, std::uint16_t port, std::string& errorMessage);
@@ -154,5 +166,9 @@ private:
     std::atomic_bool mStreamingActive = false;
     std::atomic_uintptr_t mStreamingListenSocket = static_cast<std::uintptr_t>(-1);
     std::atomic_uintptr_t mStreamingClientSocket = static_cast<std::uintptr_t>(-1);
+    std::atomic_uint64_t mHeatmapBytesPerPixel = DefaultHeatmapBytesPerPixel;
+    std::atomic_uint64_t mHeatmapGroupGapBytes = DefaultHeatmapGroupGapBytes;
+    std::atomic_uint32_t mHeatmapUnusedColor = DefaultHeatmapUnusedColor;
+    std::atomic_uint32_t mHeatmapUsedColor = DefaultHeatmapUsedColor;
     std::thread mStreamingThread;
 };

@@ -314,6 +314,23 @@ void AllocationStreamReader::SetSummaryHandler(SummaryHandler handler)
 
 
 //------------------------------------------------------------------------------
+// SetHeatmapSettings
+//------------------------------------------------------------------------------
+//  Set how heatmaps are generated for future streamed summaries.
+//------------------------------------------------------------------------------
+void AllocationStreamReader::SetHeatmapSettings(std::uint64_t bytesPerPixel,
+                                                std::uint64_t groupGapBytes,
+                                                std::uint32_t unusedColor,
+                                                std::uint32_t usedColor)
+{
+    mHeatmapBytesPerPixel.store(bytesPerPixel, std::memory_order_release);
+    mHeatmapGroupGapBytes.store(groupGapBytes, std::memory_order_release);
+    mHeatmapUnusedColor.store(unusedColor, std::memory_order_release);
+    mHeatmapUsedColor.store(usedColor, std::memory_order_release);
+}
+
+
+//------------------------------------------------------------------------------
 // Start
 //------------------------------------------------------------------------------
 //  Open a native listener socket and start the streaming listener thread.
@@ -798,6 +815,10 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
     summary.mUntrackedDeallocations = snapshot.mUntrackedDeallocations;
     summary.mTrackedAllocationsByType = snapshot.mTrackedAllocationsByType;
     summary.mTrackedDeallocationsByType = snapshot.mTrackedDeallocationsByType;
+    summary.mHeatmapBytesPerPixel = mHeatmapBytesPerPixel.load(std::memory_order_acquire);
+    summary.mHeatmapGroupGapBytes = mHeatmapGroupGapBytes.load(std::memory_order_acquire);
+    summary.mHeatmapUnusedColor = mHeatmapUnusedColor.load(std::memory_order_acquire);
+    summary.mHeatmapUsedColor = mHeatmapUsedColor.load(std::memory_order_acquire);
 
     // Set the Address ranges.
     if (!snapshot.mAllocations.empty())
@@ -856,8 +877,8 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
         lastPageEnd = pageRange.second;
     }
 
-    // Group allocations with gaps no larger than 1MB so we can create heatmaps for them.
-    constexpr std::uint64_t gapSize = 0x100000; // 1MB
+    // Group allocations with gaps no larger than the configured gap so we can create heatmaps for them.
+    const std::uint64_t gapSize = summary.mHeatmapGroupGapBytes;
     if (!snapshot.mAllocations.empty())
     {
         // Start with the first entry.
@@ -901,16 +922,24 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
     // Create a heatmap for each group.
     if (!summary.mAllocationGroups.empty())
     {
-        constexpr std::uint64_t bytesPerPixel = 256;
-        constexpr std::uint32_t emptyPixelColor = 0xFF000000;
+        const std::uint64_t bytesPerPixel = summary.mHeatmapBytesPerPixel;
+        const std::uint32_t unusedPixelColor = summary.mHeatmapUnusedColor;
+        const std::uint32_t usedPixelColor = summary.mHeatmapUsedColor;
+        const std::int32_t unusedRed = static_cast<std::int32_t>((unusedPixelColor >> 16) & 0xFF);
+        const std::int32_t unusedGreen = static_cast<std::int32_t>((unusedPixelColor >> 8) & 0xFF);
+        const std::int32_t unusedBlue = static_cast<std::int32_t>(unusedPixelColor & 0xFF);
+        const std::int32_t usedRed = static_cast<std::int32_t>((usedPixelColor >> 16) & 0xFF);
+        const std::int32_t usedGreen = static_cast<std::int32_t>((usedPixelColor >> 8) & 0xFF);
+        const std::int32_t usedBlue = static_cast<std::int32_t>(usedPixelColor & 0xFF);
         summary.mHeatmaps.reserve(summary.mAllocationGroups.size());
         for (const StreamedAllocationGroup& group : summary.mAllocationGroups)
         {
             const std::uint64_t numberOfBytes = group.mEndAddress - group.mStartAddress;
             const std::uint64_t numberOfPixels = (numberOfBytes + bytesPerPixel - 1) / bytesPerPixel;
 
-            // Create the heatmap, initializing it to all black.
-            std::vector<std::uint32_t> heatmap(static_cast<std::size_t>(numberOfPixels), emptyPixelColor);
+            // Create the heatmap, initializing it to the configured unused color.
+            std::vector<std::uint32_t> heatmap(static_cast<std::size_t>(numberOfPixels), unusedPixelColor);
+            std::vector<std::uint16_t> pixelCoverage(static_cast<std::size_t>(numberOfPixels), 0);
             for (std::size_t allocationOffset = 0; allocationOffset < group.mAllocationCount; allocationOffset++)
             {
                 // Get the next allocation in the group and skip it if the size is zero.
@@ -934,12 +963,27 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
                     const std::uintptr_t pixelEndAddress = pixelStartAddress + bytesPerPixel;
                     const std::uintptr_t coveredStartAddress = std::max(allocationStartAddress, pixelStartAddress);
                     const std::uintptr_t coveredEndAddress = std::min(allocationEndAddress, pixelEndAddress);
-                    const std::uint32_t coveredBytes = static_cast<std::uint32_t>(coveredEndAddress - coveredStartAddress);
+                    const std::uint64_t coveredBytes = coveredEndAddress - coveredStartAddress;
 
-                    std::uint32_t& pixel = heatmap[static_cast<std::size_t>(pixelIndex)];
-                    const std::uint32_t green = std::min<std::uint32_t>(0xFF, ((pixel >> 8) & 0xFF) + coveredBytes);
-                    pixel = emptyPixelColor | (green << 8);
+                    std::uint16_t& coverage = pixelCoverage[static_cast<std::size_t>(pixelIndex)];
+                    coverage = static_cast<std::uint16_t>(
+                        std::min<std::uint64_t>(bytesPerPixel, static_cast<std::uint64_t>(coverage) + coveredBytes));
                 }
+            }
+
+            for (std::size_t pixelIndex = 0; pixelIndex < pixelCoverage.size(); pixelIndex++)
+            {
+                const std::uint32_t coverage = pixelCoverage[pixelIndex];
+                const std::uint32_t red = static_cast<std::uint32_t>(
+                    unusedRed + (((usedRed - unusedRed) * static_cast<std::int32_t>(coverage)) /
+                                 static_cast<std::int32_t>(bytesPerPixel)));
+                const std::uint32_t green = static_cast<std::uint32_t>(
+                    unusedGreen + (((usedGreen - unusedGreen) * static_cast<std::int32_t>(coverage)) /
+                                   static_cast<std::int32_t>(bytesPerPixel)));
+                const std::uint32_t blue = static_cast<std::uint32_t>(
+                    unusedBlue + (((usedBlue - unusedBlue) * static_cast<std::int32_t>(coverage)) /
+                                  static_cast<std::int32_t>(bytesPerPixel)));
+                heatmap[pixelIndex] = 0xFF000000 | (red << 16) | (green << 8) | blue;
             }
 
             summary.mHeatmaps.push_back(std::move(heatmap));

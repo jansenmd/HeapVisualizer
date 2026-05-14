@@ -8,6 +8,8 @@
 #include <QBrush>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QColorDialog>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -15,6 +17,7 @@
 #include <QFontDatabase>
 #include <QGraphicsOpacityEffect>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -50,8 +53,6 @@
 
 namespace
 {
-
-constexpr std::uint64_t HeatmapBytesPerPixel = 256;
 
 //------------------------------------------------------------------------------
 // AllocationOperationName
@@ -397,6 +398,101 @@ std::string BuildBusyPercentageText(double busyPercentage)
 }
 
 
+class ColorSwatchButton : public QPushButton
+{
+public:
+    explicit ColorSwatchButton(QWidget* parent = nullptr)
+        : QPushButton(parent)
+    {
+        setText(QString());
+        setObjectName(QStringLiteral("HeatmapColorSwatchButton"));
+        setFixedSize(SwatchSize, SwatchSize);
+        setMinimumSize(SwatchSize, SwatchSize);
+        setMaximumSize(SwatchSize, SwatchSize);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        setCursor(Qt::PointingHandCursor);
+        setFocusPolicy(Qt::NoFocus);
+        setFlat(true);
+        setContentsMargins(0, 0, 0, 0);
+        setStyleSheet(QStringLiteral(
+            "QPushButton#HeatmapColorSwatchButton {"
+            " min-width: %1px;"
+            " max-width: %1px;"
+            " min-height: %1px;"
+            " max-height: %1px;"
+            " padding: 0;"
+            " border: 0;"
+            " background: transparent;"
+            "}"
+        ).arg(SwatchSize));
+    }
+
+    void SetColor(std::uint32_t color)
+    {
+        mColor = color;
+        update();
+    }
+
+    QSize sizeHint() const override
+    {
+        return QSize(SwatchSize, SwatchSize);
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        return QSize(SwatchSize, SwatchSize);
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        static_cast<void>(event);
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+
+        painter.fillRect(rect(), palette().window());
+        painter.fillRect(QRect(1, 1, width() - 2, height() - 2), QColor::fromRgba(mColor));
+
+        const QColor borderColor = (isDown() || underMouse())
+            ? QColor(QStringLiteral("#111827"))
+            : QColor(QStringLiteral("#536173"));
+        painter.setPen(borderColor);
+        painter.drawRect(QRect(0, 0, width() - 1, height() - 1));
+    }
+
+private:
+    static constexpr int SwatchSize = 16;
+
+    std::uint32_t mColor = DefaultHeatmapUnusedColor;
+};
+
+
+//------------------------------------------------------------------------------
+// SetColorButtonStyle
+//------------------------------------------------------------------------------
+//  Show the selected heatmap color directly on a button.
+//------------------------------------------------------------------------------
+void SetColorButtonStyle(QPushButton* button, std::uint32_t color)
+{
+    if (button == nullptr)
+    {
+        return;
+    }
+
+    button->setText(QString());
+    button->setFixedSize(16, 16);
+    button->setMinimumSize(16, 16);
+    button->setMaximumSize(16, 16);
+    button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    ColorSwatchButton* swatchButton = dynamic_cast<ColorSwatchButton*>(button);
+    if (swatchButton != nullptr)
+    {
+        swatchButton->SetColor(color);
+    }
+}
+
+
 //------------------------------------------------------------------------------
 // EnsureTableItem
 //------------------------------------------------------------------------------
@@ -473,9 +569,10 @@ HeatmapImageWidget::HeatmapImageWidget(QWidget* parent)
 //------------------------------------------------------------------------------
 //  Store packed ARGB heatmap pixels for later one-to-one layout and painting.
 //------------------------------------------------------------------------------
-void HeatmapImageWidget::SetHeatmap(const std::vector<std::uint32_t>& pixels)
+void HeatmapImageWidget::SetHeatmap(const std::vector<std::uint32_t>& pixels, std::uint64_t bytesPerPixel)
 {
     mPixels = pixels;
+    mBytesPerPixel = bytesPerPixel;
     mImage = QImage();
     mImagePixelsPerRow = 0;
     RebuildImageForWidth(width());
@@ -647,7 +744,7 @@ void HeatmapImageWidget::UpdateRowBytesLabel()
     }
 
     const std::uint64_t bytesPerRow =
-        static_cast<std::uint64_t>(mImage.width()) * HeatmapBytesPerPixel;
+        static_cast<std::uint64_t>(mImage.width()) * mBytesPerPixel;
     mRowBytesLabel->setText(
         QStringLiteral("Bytes per row: %1")
             .arg(QString::fromStdString(BuildBinLimitLabel(static_cast<std::size_t>(bytesPerRow)))));
@@ -1147,6 +1244,96 @@ MainWindow::MainWindow(QWidget* parent)
     QWidget* heatmapWidget = new QWidget(mViewTabs);
     QVBoxLayout* heatmapLayout = new QVBoxLayout(heatmapWidget);
     heatmapLayout->setContentsMargins(0, 0, 0, 0);
+    heatmapLayout->setSpacing(8);
+
+    QWidget* heatmapControlsWidget = new QWidget(heatmapWidget);
+    QHBoxLayout* heatmapControlsLayout = new QHBoxLayout(heatmapControlsWidget);
+    heatmapControlsLayout->setContentsMargins(12, 0, 0, 0);
+    heatmapControlsLayout->setSpacing(8);
+
+    QLabel* bytesPerPixelLabel = new QLabel(tr("Bytes per pixel"), heatmapControlsWidget);
+    mHeatmapBytesPerPixelComboBox = new QComboBox(heatmapControlsWidget);
+    for (std::uint64_t value = 1; value <= 256; value *= 2)
+    {
+        mHeatmapBytesPerPixelComboBox->addItem(
+            QString::fromStdString(BuildBinLimitLabel(static_cast<std::size_t>(value))),
+            static_cast<int>(value));
+    }
+    mHeatmapBytesPerPixelComboBox->setCurrentIndex(
+        mHeatmapBytesPerPixelComboBox->findData(static_cast<int>(DefaultHeatmapBytesPerPixel)));
+
+    QLabel* groupGapLabel = new QLabel(tr("Group gap"), heatmapControlsWidget);
+    mHeatmapGroupGapComboBox = new QComboBox(heatmapControlsWidget);
+    for (std::uint64_t value = 0x10000; value <= 0x4000000; value *= 2)
+    {
+        mHeatmapGroupGapComboBox->addItem(
+            QString::fromStdString(BuildBinLimitLabel(static_cast<std::size_t>(value))),
+            static_cast<int>(value));
+    }
+    mHeatmapGroupGapComboBox->setCurrentIndex(
+        mHeatmapGroupGapComboBox->findData(static_cast<int>(DefaultHeatmapGroupGapBytes)));
+
+    QLabel* usedColorLabel = new QLabel(tr("Allocated"), heatmapControlsWidget);
+    mHeatmapUsedColorButton = new ColorSwatchButton(heatmapControlsWidget);
+    SetColorButtonStyle(mHeatmapUsedColorButton, mHeatmapUsedColor);
+
+    QLabel* unusedColorLabel = new QLabel(tr("Unallocated"), heatmapControlsWidget);
+    mHeatmapUnusedColorButton = new ColorSwatchButton(heatmapControlsWidget);
+    SetColorButtonStyle(mHeatmapUnusedColorButton, mHeatmapUnusedColor);
+
+    connect(mHeatmapBytesPerPixelComboBox, &QComboBox::currentIndexChanged, this, [this](int)
+    {
+        UpdateHeatmapSettings();
+    });
+    connect(mHeatmapGroupGapComboBox, &QComboBox::currentIndexChanged, this, [this](int)
+    {
+        UpdateHeatmapSettings();
+    });
+    connect(mHeatmapUnusedColorButton, &QPushButton::clicked, this, [this]
+    {
+        const QColor selectedColor = QColorDialog::getColor(
+            QColor::fromRgba(mHeatmapUnusedColor),
+            this,
+            tr("Choose unallocated heatmap color"));
+        if (!selectedColor.isValid())
+        {
+            return;
+        }
+
+        mHeatmapUnusedColor = selectedColor.rgba();
+        SetColorButtonStyle(mHeatmapUnusedColorButton, mHeatmapUnusedColor);
+        UpdateHeatmapSettings();
+    });
+    connect(mHeatmapUsedColorButton, &QPushButton::clicked, this, [this]
+    {
+        const QColor selectedColor = QColorDialog::getColor(
+            QColor::fromRgba(mHeatmapUsedColor),
+            this,
+            tr("Choose allocated heatmap color"));
+        if (!selectedColor.isValid())
+        {
+            return;
+        }
+
+        mHeatmapUsedColor = selectedColor.rgba();
+        SetColorButtonStyle(mHeatmapUsedColorButton, mHeatmapUsedColor);
+        UpdateHeatmapSettings();
+    });
+
+    heatmapControlsLayout->addWidget(bytesPerPixelLabel);
+    heatmapControlsLayout->addWidget(mHeatmapBytesPerPixelComboBox);
+    heatmapControlsLayout->addSpacing(12);
+    heatmapControlsLayout->addWidget(groupGapLabel);
+    heatmapControlsLayout->addWidget(mHeatmapGroupGapComboBox);
+    heatmapControlsLayout->addSpacing(12);
+    heatmapControlsLayout->addWidget(usedColorLabel);
+    heatmapControlsLayout->addWidget(mHeatmapUsedColorButton);
+    heatmapControlsLayout->addSpacing(12);
+    heatmapControlsLayout->addWidget(unusedColorLabel);
+    heatmapControlsLayout->addWidget(mHeatmapUnusedColorButton);
+    heatmapControlsLayout->addStretch(1);
+    heatmapLayout->addWidget(heatmapControlsWidget);
+
     mHeatmapScrollArea = new QScrollArea(heatmapWidget);
     mHeatmapScrollArea->setWidgetResizable(true);
     mHeatmapScrollArea->setFrameShape(QFrame::NoFrame);
@@ -1156,6 +1343,7 @@ MainWindow::MainWindow(QWidget* parent)
     mHeatmapLayout->setSpacing(12);
     mHeatmapScrollArea->setWidget(mHeatmapContentWidget);
     heatmapLayout->addWidget(mHeatmapScrollArea);
+    UpdateHeatmapSettings();
 
     mViewTabs->addTab(overviewWidget, tr("Overview"));
     mViewTabs->addTab(binsWidget, tr("Bins"));
@@ -1676,6 +1864,8 @@ void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
         delete item;
     }
 
+    mHeatmapLayout->addSpacing(4);
+
     QLabel* rowBytesLabel = new QLabel(tr("Bytes per row: 0"), mHeatmapContentWidget);
     rowBytesLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     mHeatmapLayout->addWidget(rowBytesLabel);
@@ -1731,7 +1921,7 @@ void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
         dimensionsLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 
         HeatmapImageWidget* heatmapWidget = new HeatmapImageWidget(heatmapFrame);
-        heatmapWidget->SetHeatmap(heatmap);
+        heatmapWidget->SetHeatmap(heatmap, summary.mHeatmapBytesPerPixel);
         heatmapWidget->SetDimensionsLabel(dimensionsLabel);
         heatmapWidget->SetRowBytesLabel(rowBytesLabel);
 
@@ -1743,6 +1933,30 @@ void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
     }
 
     mHeatmapLayout->addStretch(1);
+}
+
+
+//------------------------------------------------------------------------------
+// UpdateHeatmapSettings
+//------------------------------------------------------------------------------
+//  Apply the selected heatmap generation settings to future stream summaries.
+//------------------------------------------------------------------------------
+void MainWindow::UpdateHeatmapSettings()
+{
+    if ((mHeatmapBytesPerPixelComboBox == nullptr) || (mHeatmapGroupGapComboBox == nullptr))
+    {
+        return;
+    }
+
+    const std::uint64_t bytesPerPixel =
+        static_cast<std::uint64_t>(mHeatmapBytesPerPixelComboBox->currentData().toULongLong());
+    const std::uint64_t groupGapBytes =
+        static_cast<std::uint64_t>(mHeatmapGroupGapComboBox->currentData().toULongLong());
+    mAllocationStreamReader.SetHeatmapSettings(
+        bytesPerPixel,
+        groupGapBytes,
+        mHeatmapUnusedColor,
+        mHeatmapUsedColor);
 }
 
 
