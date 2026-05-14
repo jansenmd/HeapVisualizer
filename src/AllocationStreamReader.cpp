@@ -902,15 +902,47 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
     if (!summary.mAllocationGroups.empty())
     {
         constexpr std::uint64_t bytesPerPixel = 256;
+        constexpr std::uint32_t emptyPixelColor = 0xFF000000;
         summary.mHeatmaps.reserve(summary.mAllocationGroups.size());
         for (const StreamedAllocationGroup& group : summary.mAllocationGroups)
         {
             const std::uint64_t numberOfBytes = group.mEndAddress - group.mStartAddress;
             const std::uint64_t numberOfPixels = (numberOfBytes + bytesPerPixel - 1) / bytesPerPixel;
 
-            std::vector<uint32_t> heatmap;
-            heatmap.reserve(numberOfPixels);
-            summary.mHeatmaps.push_back(heatmap);
+            // Create the heatmap, initializing it to all black.
+            std::vector<std::uint32_t> heatmap(static_cast<std::size_t>(numberOfPixels), emptyPixelColor);
+            for (std::size_t allocationOffset = 0; allocationOffset < group.mAllocationCount; allocationOffset++)
+            {
+                // Get the next allocation in the group and skip it if the size is zero.
+                const StreamedAllocation& allocation =
+                    snapshot.mAllocations[group.mFirstAllocationIndex + allocationOffset];
+                if (allocation.mSize == 0)
+                {
+                    continue;
+                }
+
+                // Get the start and end address of this allocation.
+                const std::uintptr_t allocationStartAddress = allocation.mAddress;
+                const std::uintptr_t allocationEndAddress = allocation.mAddress + allocation.mSize;
+                // Map the start and end of the allocation to a first and last pixel (may be the same pixel).
+                const std::uint64_t firstPixelIndex = (allocationStartAddress - group.mStartAddress) / bytesPerPixel;
+                const std::uint64_t lastPixelIndex = (allocationEndAddress - 1 - group.mStartAddress) / bytesPerPixel;
+                // Iterate across the pixels affected by this allocation.
+                for (std::uint64_t pixelIndex = firstPixelIndex; pixelIndex <= lastPixelIndex; pixelIndex++)
+                {
+                    const std::uintptr_t pixelStartAddress = group.mStartAddress + (pixelIndex * bytesPerPixel);
+                    const std::uintptr_t pixelEndAddress = pixelStartAddress + bytesPerPixel;
+                    const std::uintptr_t coveredStartAddress = std::max(allocationStartAddress, pixelStartAddress);
+                    const std::uintptr_t coveredEndAddress = std::min(allocationEndAddress, pixelEndAddress);
+                    const std::uint32_t coveredBytes = static_cast<std::uint32_t>(coveredEndAddress - coveredStartAddress);
+
+                    std::uint32_t& pixel = heatmap[static_cast<std::size_t>(pixelIndex)];
+                    const std::uint32_t green = std::min<std::uint32_t>(0xFF, ((pixel >> 8) & 0xFF) + coveredBytes);
+                    pixel = emptyPixelColor | (green << 8);
+                }
+            }
+
+            summary.mHeatmaps.push_back(std::move(heatmap));
         }
     }
 

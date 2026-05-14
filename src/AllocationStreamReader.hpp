@@ -92,7 +92,7 @@ struct StreamedAllocationSummary
     std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount> mTrackedDeallocationsByType = {};
     std::vector<StreamedAllocationBin> mBins;
     std::vector<StreamedAllocationGroup> mAllocationGroups;
-    std::vector<std::vector<uint32_t>> mHeatmaps;
+    std::vector<std::vector<std::uint32_t>> mHeatmaps;
 };
 
 
