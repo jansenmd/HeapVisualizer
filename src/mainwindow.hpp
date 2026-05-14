@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QImage>
 #include <QMainWindow>
 #include <QWidget>
 
@@ -18,8 +19,40 @@ class QCheckBox;
 class QLabel;
 class QPaintEvent;
 class QResizeEvent;
+class QScrollArea;
 class QTableWidget;
 class QTabWidget;
+class QVBoxLayout;
+
+class HeatmapImageWidget : public QWidget
+{
+public:
+    explicit HeatmapImageWidget(QWidget* parent = nullptr);
+
+    void SetHeatmap(const std::vector<std::uint32_t>& pixels);
+    void SetDimensionsLabel(QLabel* label);
+    void SetRowBytesLabel(QLabel* label);
+
+    [[nodiscard]] bool hasHeightForWidth() const override;
+    [[nodiscard]] int heightForWidth(int width) const override;
+    [[nodiscard]] QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+
+private:
+    [[nodiscard]] std::size_t PixelsPerRowForWidth(int width) const;
+    void UpdateDimensionsLabel();
+    void UpdateRowBytesLabel();
+    void RebuildImageForWidth(int width);
+
+    std::vector<std::uint32_t> mPixels;
+    QImage mImage;
+    QLabel* mDimensionsLabel = nullptr;
+    QLabel* mRowBytesLabel = nullptr;
+    std::size_t mImagePixelsPerRow = 0;
+};
 
 class BusyIndicatorBar : public QWidget
 {
@@ -86,6 +119,7 @@ private:
     void UpdateStreamingSummary(const StreamedAllocationSummary& summary);
     void UpdateOverviewView(const StreamedAllocationSummary& summary);
     void UpdateBinsView(const StreamedAllocationSummary& summary);
+    void UpdateHeatmapView(const StreamedAllocationSummary& summary);
     void UpdateSuppressedBinState(std::size_t minimumSize, std::size_t maximumSize, bool suppressed);
     void ShowAboutDialog();
 
@@ -96,7 +130,9 @@ private:
     QTableWidget* mOverviewTable = nullptr;
     QTableWidget* mBinsTable = nullptr;
     BinGraphWidget* mBinsGraphWidget = nullptr;
-    QLabel* mHeatmapLabel = nullptr;
+    QScrollArea* mHeatmapScrollArea = nullptr;
+    QWidget* mHeatmapContentWidget = nullptr;
+    QVBoxLayout* mHeatmapLayout = nullptr;
     BusyIndicatorBar* mBusyIndicatorBar = nullptr;
     QLabel* mBusyIndicatorLabel = nullptr;
     AllocationStreamReader mAllocationStreamReader;

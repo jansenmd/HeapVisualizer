@@ -24,11 +24,13 @@
 #include <QMetaObject>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QString>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSizePolicy>
 #include <QStatusBar>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -40,6 +42,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -47,6 +50,8 @@
 
 namespace
 {
+
+constexpr std::uint64_t HeatmapBytesPerPixel = 256;
 
 //------------------------------------------------------------------------------
 // AllocationOperationName
@@ -445,6 +450,239 @@ void SetTableRow(QTableWidget* tableWidget,
     tableWidget->setItem(row, 1, valueItem);
 }
 
+}
+
+
+//------------------------------------------------------------------------------
+// HeatmapImageWidget
+//------------------------------------------------------------------------------
+//  Construct a widget that paints heatmap pixels one-to-one.
+//------------------------------------------------------------------------------
+HeatmapImageWidget::HeatmapImageWidget(QWidget* parent)
+    : QWidget(parent)
+{
+    QSizePolicy sizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    sizePolicy.setHeightForWidth(true);
+    setSizePolicy(sizePolicy);
+    setMinimumHeight(1);
+}
+
+
+//------------------------------------------------------------------------------
+// SetHeatmap
+//------------------------------------------------------------------------------
+//  Store packed ARGB heatmap pixels for later one-to-one layout and painting.
+//------------------------------------------------------------------------------
+void HeatmapImageWidget::SetHeatmap(const std::vector<std::uint32_t>& pixels)
+{
+    mPixels = pixels;
+    mImage = QImage();
+    mImagePixelsPerRow = 0;
+    RebuildImageForWidth(width());
+    UpdateDimensionsLabel();
+    updateGeometry();
+    update();
+}
+
+
+//------------------------------------------------------------------------------
+// SetDimensionsLabel
+//------------------------------------------------------------------------------
+//  Set the label that describes the current heatmap image dimensions.
+//------------------------------------------------------------------------------
+void HeatmapImageWidget::SetDimensionsLabel(QLabel* label)
+{
+    mDimensionsLabel = label;
+    UpdateDimensionsLabel();
+}
+
+
+//------------------------------------------------------------------------------
+// SetRowBytesLabel
+//------------------------------------------------------------------------------
+//  Set the shared label that describes how much address space one image row covers.
+//------------------------------------------------------------------------------
+void HeatmapImageWidget::SetRowBytesLabel(QLabel* label)
+{
+    mRowBytesLabel = label;
+    UpdateRowBytesLabel();
+}
+
+
+//------------------------------------------------------------------------------
+// hasHeightForWidth
+//------------------------------------------------------------------------------
+//  Return whether the image height depends on the available display width.
+//------------------------------------------------------------------------------
+bool HeatmapImageWidget::hasHeightForWidth() const
+{
+    return true;
+}
+
+
+//------------------------------------------------------------------------------
+// heightForWidth
+//------------------------------------------------------------------------------
+//  Return the number of one-to-one pixel rows needed for the current width.
+//------------------------------------------------------------------------------
+int HeatmapImageWidget::heightForWidth(int width) const
+{
+    if (mPixels.empty())
+    {
+        return 1;
+    }
+
+    const std::size_t pixelsPerRow = PixelsPerRowForWidth(width);
+    return static_cast<int>((mPixels.size() + pixelsPerRow - 1) / pixelsPerRow);
+}
+
+
+//------------------------------------------------------------------------------
+// sizeHint
+//------------------------------------------------------------------------------
+//  Return a default size for layout calculations.
+//------------------------------------------------------------------------------
+QSize HeatmapImageWidget::sizeHint() const
+{
+    constexpr int defaultWidth = 512;
+    return QSize(defaultWidth, heightForWidth(defaultWidth));
+}
+
+
+//------------------------------------------------------------------------------
+// paintEvent
+//------------------------------------------------------------------------------
+//  Paint the heatmap image without scaling pixels.
+//------------------------------------------------------------------------------
+void HeatmapImageWidget::paintEvent(QPaintEvent* event)
+{
+    static_cast<void>(event);
+
+    RebuildImageForWidth(width());
+
+    QPainter painter(this);
+    painter.fillRect(rect(), QColor(QStringLiteral("#ffffff")));
+
+    if (!mImage.isNull())
+    {
+        painter.drawImage(0, 0, mImage);
+    }
+}
+
+
+//------------------------------------------------------------------------------
+// resizeEvent
+//------------------------------------------------------------------------------
+//  Reflow the heatmap when the available pixel width crosses a power of two.
+//------------------------------------------------------------------------------
+void HeatmapImageWidget::resizeEvent(QResizeEvent* event)
+{
+    RebuildImageForWidth(event->size().width());
+    UpdateDimensionsLabel();
+    UpdateRowBytesLabel();
+    updateGeometry();
+    QWidget::resizeEvent(event);
+}
+
+
+//------------------------------------------------------------------------------
+// PixelsPerRowForWidth
+//------------------------------------------------------------------------------
+//  Return the largest power-of-two row width that fits the available pixels.
+//------------------------------------------------------------------------------
+std::size_t HeatmapImageWidget::PixelsPerRowForWidth(int width) const
+{
+    std::size_t pixelsPerRow = 1;
+    const std::size_t availableWidth = static_cast<std::size_t>(std::max(1, width));
+    while ((pixelsPerRow * 2) <= availableWidth)
+    {
+        pixelsPerRow *= 2;
+    }
+
+    return pixelsPerRow;
+}
+
+
+//------------------------------------------------------------------------------
+// UpdateDimensionsLabel
+//------------------------------------------------------------------------------
+//  Display the current reflowed image dimensions.
+//------------------------------------------------------------------------------
+void HeatmapImageWidget::UpdateDimensionsLabel()
+{
+    if (mDimensionsLabel == nullptr)
+    {
+        return;
+    }
+
+    if (mImage.isNull())
+    {
+        mDimensionsLabel->setText(QStringLiteral("Image 0 x 0 px"));
+        return;
+    }
+
+    mDimensionsLabel->setText(
+        QStringLiteral("Image %1 x %2 px")
+            .arg(mImage.width())
+            .arg(mImage.height()));
+}
+
+
+//------------------------------------------------------------------------------
+// UpdateRowBytesLabel
+//------------------------------------------------------------------------------
+//  Display the current number of bytes represented by one image row.
+//------------------------------------------------------------------------------
+void HeatmapImageWidget::UpdateRowBytesLabel()
+{
+    if (mRowBytesLabel == nullptr)
+    {
+        return;
+    }
+
+    if (mImage.isNull())
+    {
+        mRowBytesLabel->setText(QStringLiteral("Bytes per row: 0"));
+        return;
+    }
+
+    const std::uint64_t bytesPerRow =
+        static_cast<std::uint64_t>(mImage.width()) * HeatmapBytesPerPixel;
+    mRowBytesLabel->setText(
+        QStringLiteral("Bytes per row: %1")
+            .arg(QString::fromStdString(BuildBinLimitLabel(static_cast<std::size_t>(bytesPerRow)))));
+}
+
+
+//------------------------------------------------------------------------------
+// RebuildImageForWidth
+//------------------------------------------------------------------------------
+//  Reflow heatmap pixels into a power-of-two-wide image for the current width.
+//------------------------------------------------------------------------------
+void HeatmapImageWidget::RebuildImageForWidth(int width)
+{
+    if (mPixels.empty())
+    {
+        mImage = QImage();
+        mImagePixelsPerRow = 0;
+        return;
+    }
+
+    const std::size_t pixelsPerRow = PixelsPerRowForWidth(width);
+    if ((!mImage.isNull()) && (mImagePixelsPerRow == pixelsPerRow))
+    {
+        return;
+    }
+
+    const std::size_t imageHeight = (mPixels.size() + pixelsPerRow - 1) / pixelsPerRow;
+    mImage = QImage(
+        static_cast<int>(pixelsPerRow),
+        static_cast<int>(imageHeight),
+        QImage::Format_ARGB32);
+    mImage.fill(0xffffffff);
+    std::memcpy(mImage.bits(), mPixels.data(), mPixels.size() * sizeof(std::uint32_t));
+    mImagePixelsPerRow = pixelsPerRow;
+    UpdateRowBytesLabel();
 }
 
 
@@ -909,10 +1147,15 @@ MainWindow::MainWindow(QWidget* parent)
     QWidget* heatmapWidget = new QWidget(mViewTabs);
     QVBoxLayout* heatmapLayout = new QVBoxLayout(heatmapWidget);
     heatmapLayout->setContentsMargins(0, 0, 0, 0);
-    mHeatmapLabel = new QLabel(tr("Heatmap view coming later."), heatmapWidget);
-    mHeatmapLabel->setObjectName(QStringLiteral("SummaryPanel"));
-    mHeatmapLabel->setAlignment(Qt::AlignCenter);
-    heatmapLayout->addWidget(mHeatmapLabel);
+    mHeatmapScrollArea = new QScrollArea(heatmapWidget);
+    mHeatmapScrollArea->setWidgetResizable(true);
+    mHeatmapScrollArea->setFrameShape(QFrame::NoFrame);
+    mHeatmapContentWidget = new QWidget(mHeatmapScrollArea);
+    mHeatmapLayout = new QVBoxLayout(mHeatmapContentWidget);
+    mHeatmapLayout->setContentsMargins(0, 0, 0, 0);
+    mHeatmapLayout->setSpacing(12);
+    mHeatmapScrollArea->setWidget(mHeatmapContentWidget);
+    heatmapLayout->addWidget(mHeatmapScrollArea);
 
     mViewTabs->addTab(overviewWidget, tr("Overview"));
     mViewTabs->addTab(binsWidget, tr("Bins"));
@@ -1168,6 +1411,7 @@ void MainWindow::UpdateStreamingSummary(const StreamedAllocationSummary& summary
 
     UpdateOverviewView(summary);
     UpdateBinsView(summary);
+    UpdateHeatmapView(summary);
 
     const std::uint64_t viewUpdateMicroseconds =
         static_cast<std::uint64_t>(
@@ -1408,6 +1652,97 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
     }
 
     mBinsTable->resizeRowsToContents();
+}
+
+
+//------------------------------------------------------------------------------
+// UpdateHeatmapView
+//------------------------------------------------------------------------------
+//  Display each allocation heatmap as a labeled, width-responsive image.
+//------------------------------------------------------------------------------
+void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
+{
+    if (mHeatmapLayout == nullptr)
+    {
+        return;
+    }
+
+    while (QLayoutItem* item = mHeatmapLayout->takeAt(0))
+    {
+        if (QWidget* widget = item->widget())
+        {
+            delete widget;
+        }
+        delete item;
+    }
+
+    QLabel* rowBytesLabel = new QLabel(tr("Bytes per row: 0"), mHeatmapContentWidget);
+    rowBytesLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    mHeatmapLayout->addWidget(rowBytesLabel);
+
+    const std::size_t heatmapCount = std::min(summary.mAllocationGroups.size(), summary.mHeatmaps.size());
+    if (heatmapCount == 0)
+    {
+        QLabel* emptyLabel = new QLabel(tr("No heatmaps available."), mHeatmapContentWidget);
+        emptyLabel->setAlignment(Qt::AlignCenter);
+        mHeatmapLayout->addWidget(emptyLabel);
+        mHeatmapLayout->addStretch(1);
+        return;
+    }
+
+    for (std::size_t heatmapIndex = 0; heatmapIndex < heatmapCount; heatmapIndex++)
+    {
+        const StreamedAllocationGroup& group = summary.mAllocationGroups[heatmapIndex];
+        const std::vector<std::uint32_t>& heatmap = summary.mHeatmaps[heatmapIndex];
+        const std::uint64_t addressSpan = group.mEndAddress - group.mStartAddress;
+
+        QFrame* heatmapFrame = new QFrame(mHeatmapContentWidget);
+        heatmapFrame->setObjectName(QStringLiteral("HeatmapEntryFrame"));
+        heatmapFrame->setFrameShape(QFrame::StyledPanel);
+        heatmapFrame->setFrameShadow(QFrame::Plain);
+        heatmapFrame->setLineWidth(1);
+        heatmapFrame->setStyleSheet(QStringLiteral(
+            "#HeatmapEntryFrame {"
+            "  background: #ffffff;"
+            "  border: 1px solid #cfd8e3;"
+            "  border-radius: 4px;"
+            "}"));
+        QVBoxLayout* groupLayout = new QVBoxLayout(heatmapFrame);
+        groupLayout->setContentsMargins(12, 10, 12, 12);
+        groupLayout->setSpacing(6);
+
+        QLabel* titleLabel = new QLabel(
+            tr("Heatmap %1").arg(static_cast<unsigned long long>(heatmapIndex + 1)),
+            heatmapFrame);
+        QFont titleFont = titleLabel->font();
+        titleFont.setWeight(QFont::DemiBold);
+        titleLabel->setFont(titleFont);
+
+        QLabel* label = new QLabel(heatmapFrame);
+        label->setText(
+            tr("%1 - %2 | Span %3 | Allocations %4")
+                .arg(QString::fromStdString(BuildAddressText(group.mStartAddress, true)))
+                .arg(QString::fromStdString(BuildAddressText(group.mEndAddress, true)))
+                .arg(QString::fromStdString(BuildBinLimitLabel(static_cast<std::size_t>(addressSpan))))
+                .arg(QString::fromStdString(BuildCommaSeparatedIntegerText(group.mAllocationCount))));
+        label->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+
+        QLabel* dimensionsLabel = new QLabel(heatmapFrame);
+        dimensionsLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+
+        HeatmapImageWidget* heatmapWidget = new HeatmapImageWidget(heatmapFrame);
+        heatmapWidget->SetHeatmap(heatmap);
+        heatmapWidget->SetDimensionsLabel(dimensionsLabel);
+        heatmapWidget->SetRowBytesLabel(rowBytesLabel);
+
+        groupLayout->addWidget(titleLabel);
+        groupLayout->addWidget(label);
+        groupLayout->addWidget(dimensionsLabel);
+        groupLayout->addWidget(heatmapWidget);
+        mHeatmapLayout->addWidget(heatmapFrame);
+    }
+
+    mHeatmapLayout->addStretch(1);
 }
 
 
