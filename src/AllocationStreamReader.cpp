@@ -856,5 +856,63 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
         lastPageEnd = pageRange.second;
     }
 
+    // Group allocations with gaps no larger than 1MB so we can create heatmaps for them.
+    constexpr std::uint64_t gapSize = 0x100000; // 1MB
+    if (!snapshot.mAllocations.empty())
+    {
+        // Start with the first entry.
+        std::size_t groupStartIndex = 0;
+        std::uintptr_t groupEndAddress = snapshot.mAllocations.front().mAddress + snapshot.mAllocations.front().mSize;
+
+        // Starting at the second entry, find where the gaps between
+        // allocations exceeds the gap size.
+        for (std::size_t allocationIndex = 1; allocationIndex < snapshot.mAllocations.size(); allocationIndex++)
+        {
+            const StreamedAllocation& allocation = snapshot.mAllocations[allocationIndex];
+            if (groupEndAddress + gapSize > allocation.mAddress)
+            {
+                // Next allocation is less than the gap size away.
+                // Update the end address and continue.
+                groupEndAddress = allocation.mAddress + allocation.mSize;
+                continue;
+            }
+
+            // Next allocation is a gap size or more away.
+            // Add the group entry.
+            summary.mAllocationGroups.push_back(
+                {groupStartIndex,
+                 allocationIndex - groupStartIndex,
+                 snapshot.mAllocations[groupStartIndex].mAddress,
+                 groupEndAddress});
+
+            // Start collecting information on the next group.
+            groupStartIndex = allocationIndex;
+            groupEndAddress = allocation.mAddress + allocation.mSize;
+        }
+
+        // Wrap up the final group that was in-progress when we reached the end.
+        summary.mAllocationGroups.push_back(
+            {groupStartIndex,
+             snapshot.mAllocations.size() - groupStartIndex,
+             snapshot.mAllocations[groupStartIndex].mAddress,
+             groupEndAddress});
+    }
+
+    // Create a heatmap for each group.
+    if (!summary.mAllocationGroups.empty())
+    {
+        constexpr std::uint64_t bytesPerPixel = 256;
+        summary.mHeatmaps.reserve(summary.mAllocationGroups.size());
+        for (const StreamedAllocationGroup& group : summary.mAllocationGroups)
+        {
+            const std::uint64_t numberOfBytes = group.mEndAddress - group.mStartAddress;
+            const std::uint64_t numberOfPixels = (numberOfBytes + bytesPerPixel - 1) / bytesPerPixel;
+
+            std::vector<uint32_t> heatmap;
+            heatmap.reserve(numberOfPixels);
+            summary.mHeatmaps.push_back(heatmap);
+        }
+    }
+
     return summary;
 }

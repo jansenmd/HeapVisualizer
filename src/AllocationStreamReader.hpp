@@ -65,6 +65,14 @@ struct StreamedAddressRange
     std::uintptr_t mHighestAddress = 0;
 };
 
+struct StreamedAllocationGroup
+{
+    std::size_t mFirstAllocationIndex = 0;
+    std::size_t mAllocationCount = 0;
+    std::uintptr_t mStartAddress = 0;
+    std::uintptr_t mEndAddress = 0;
+};
+
 struct StreamedAllocationSummary
 {
     std::uint64_t mStreamPayloadSize = 0;
@@ -83,7 +91,8 @@ struct StreamedAllocationSummary
     std::array<std::uint64_t, StreamedTrackedAllocationTypeCount> mTrackedAllocationsByType = {};
     std::array<std::uint64_t, StreamedTrackedDeallocationTypeCount> mTrackedDeallocationsByType = {};
     std::vector<StreamedAllocationBin> mBins;
-    std::vector<uint32_t> mHeatmap;
+    std::vector<StreamedAllocationGroup> mAllocationGroups;
+    std::vector<std::vector<uint32_t>> mHeatmaps;
 };
 
 
