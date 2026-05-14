@@ -1909,12 +1909,22 @@ void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
         titleLabel->setFont(titleFont);
 
         QLabel* label = new QLabel(heatmapFrame);
-        label->setText(
-            tr("%1 - %2 | Span %3 | Allocations %4")
-                .arg(QString::fromStdString(BuildAddressText(group.mStartAddress, true)))
-                .arg(QString::fromStdString(BuildAddressText(group.mEndAddress, true)))
-                .arg(QString::fromStdString(BuildBinLimitLabel(static_cast<std::size_t>(addressSpan))))
-                .arg(QString::fromStdString(BuildCommaSeparatedIntegerText(group.mAllocationCount))));
+        QString groupText = tr("%1 - %2 | Span %3 | Allocations %4")
+            .arg(QString::fromStdString(BuildAddressText(group.mStartAddress, true)))
+            .arg(QString::fromStdString(BuildAddressText(group.mEndAddress, true)))
+            .arg(QString::fromStdString(BuildBinLimitLabel(static_cast<std::size_t>(addressSpan))))
+            .arg(QString::fromStdString(BuildCommaSeparatedIntegerText(group.mAllocationCount)));
+        if (heatmapIndex > 0)
+        {
+            const StreamedAllocationGroup& previousGroup = summary.mAllocationGroups[heatmapIndex - 1];
+            const std::uint64_t previousGap =
+                (group.mStartAddress > previousGroup.mEndAddress)
+                    ? static_cast<std::uint64_t>(group.mStartAddress - previousGroup.mEndAddress)
+                    : 0;
+            groupText += tr(" | Previous gap %1")
+                .arg(QString::fromStdString(BuildBinLimitLabel(static_cast<std::size_t>(previousGap))));
+        }
+        label->setText(groupText);
         label->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 
         QLabel* dimensionsLabel = new QLabel(heatmapFrame);
