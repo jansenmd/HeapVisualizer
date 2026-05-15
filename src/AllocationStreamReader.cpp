@@ -48,6 +48,23 @@ static_assert(StreamedTrackedAllocationTypeCount == TrackedAllocationTypeCount);
 static_assert(StreamedTrackedDeallocationTypeCount ==
     static_cast<std::size_t>(HeapVisualizer::AllocationHooks::TrackedDeallocationType::Count));
 
+bool AllocationGroupsShouldMerge(const StreamedAllocationGroup& left,
+                                 const StreamedAllocationGroup& right,
+                                 std::uint64_t gapSize)
+{
+    if (left.mEndAddress < right.mStartAddress)
+    {
+        return static_cast<std::uint64_t>(right.mStartAddress - left.mEndAddress) <= gapSize;
+    }
+
+    if (right.mEndAddress < left.mStartAddress)
+    {
+        return static_cast<std::uint64_t>(left.mStartAddress - right.mEndAddress) <= gapSize;
+    }
+
+    return true;
+}
+
 
 }
 
@@ -324,9 +341,50 @@ void AllocationStreamReader::SetHeatmapSettings(std::uint64_t bytesPerPixel,
                                                 std::uint32_t usedColor)
 {
     mHeatmapBytesPerPixel.store(bytesPerPixel, std::memory_order_release);
-    mHeatmapGroupGapBytes.store(groupGapBytes, std::memory_order_release);
+    const std::uint64_t previousGroupGapBytes =
+        mHeatmapGroupGapBytes.exchange(groupGapBytes, std::memory_order_acq_rel);
     mHeatmapUnusedColor.store(unusedColor, std::memory_order_release);
     mHeatmapUsedColor.store(usedColor, std::memory_order_release);
+
+    if (previousGroupGapBytes != groupGapBytes)
+    {
+        std::scoped_lock lock(mPersistentAllocationGroupsMutex);
+        mPersistentAllocationGroups.clear();
+    }
+}
+
+
+//------------------------------------------------------------------------------
+// ResetPersistentAllocationGroups
+//------------------------------------------------------------------------------
+//  Clear the stable heatmap group ranges accumulated across summaries.
+//------------------------------------------------------------------------------
+void AllocationStreamReader::ResetPersistentAllocationGroups()
+{
+    std::scoped_lock lock(mPersistentAllocationGroupsMutex);
+    mPersistentAllocationGroups.clear();
+}
+
+
+//------------------------------------------------------------------------------
+// RemovePersistentAllocationGroup
+//------------------------------------------------------------------------------
+//  Remove a single stable heatmap group range.
+//------------------------------------------------------------------------------
+void AllocationStreamReader::RemovePersistentAllocationGroup(std::uintptr_t startAddress, std::uintptr_t endAddress)
+{
+    std::scoped_lock lock(mPersistentAllocationGroupsMutex);
+    const auto matchingGroup = std::find_if(
+        mPersistentAllocationGroups.begin(),
+        mPersistentAllocationGroups.end(),
+        [startAddress, endAddress](const StreamedAllocationGroup& group)
+        {
+            return (group.mStartAddress == startAddress) && (group.mEndAddress == endAddress);
+        });
+    if (matchingGroup != mPersistentAllocationGroups.end())
+    {
+        mPersistentAllocationGroups.erase(matchingGroup);
+    }
 }
 
 
@@ -801,7 +859,7 @@ void AllocationStreamReader::CalculateBinStatistics(StreamedAllocationBin& bin) 
 //------------------------------------------------------------------------------
 //  Aggregate streamed allocations and pool counters into the combined summary.
 //------------------------------------------------------------------------------
-StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const StreamedHeapSnapshot& snapshot) const
+StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const StreamedHeapSnapshot& snapshot)
 {
     StreamedAllocationSummary summary;
 
@@ -877,8 +935,10 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
         lastPageEnd = pageRange.second;
     }
 
-    // Group allocations with gaps no larger than the configured gap so we can create heatmaps for them.
+    // Group allocations with gaps no larger than the configured gap. These
+    // fresh summary groups feed the persistent ranges used to create heatmaps.
     const std::uint64_t gapSize = summary.mHeatmapGroupGapBytes;
+    std::vector<StreamedAllocationGroup> latestAllocationGroups;
     if (!snapshot.mAllocations.empty())
     {
         // Start with the first entry.
@@ -900,7 +960,7 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
 
             // Next allocation is a gap size or more away.
             // Add the group entry.
-            summary.mAllocationGroups.push_back(
+            latestAllocationGroups.push_back(
                 {groupStartIndex,
                  allocationIndex - groupStartIndex,
                  snapshot.mAllocations[groupStartIndex].mAddress,
@@ -912,11 +972,79 @@ StreamedAllocationSummary AllocationStreamReader::BuildAllocationSummary(const S
         }
 
         // Wrap up the final group that was in-progress when we reached the end.
-        summary.mAllocationGroups.push_back(
+        latestAllocationGroups.push_back(
             {groupStartIndex,
              snapshot.mAllocations.size() - groupStartIndex,
              snapshot.mAllocations[groupStartIndex].mAddress,
              groupEndAddress});
+    }
+
+    {
+        std::scoped_lock lock(mPersistentAllocationGroupsMutex);
+
+        for (const StreamedAllocationGroup& latestGroup : latestAllocationGroups)
+        {
+            StreamedAllocationGroup mergedGroup = latestGroup;
+            mergedGroup.mFirstAllocationIndex = 0;
+            mergedGroup.mAllocationCount = 0;
+
+            for (auto persistentGroup = mPersistentAllocationGroups.begin();
+                 persistentGroup != mPersistentAllocationGroups.end();)
+            {
+                if (!AllocationGroupsShouldMerge(mergedGroup, *persistentGroup, gapSize))
+                {
+                    ++persistentGroup;
+                    continue;
+                }
+
+                mergedGroup.mStartAddress = std::min(mergedGroup.mStartAddress, persistentGroup->mStartAddress);
+                mergedGroup.mEndAddress = std::max(mergedGroup.mEndAddress, persistentGroup->mEndAddress);
+                persistentGroup = mPersistentAllocationGroups.erase(persistentGroup);
+            }
+
+            mPersistentAllocationGroups.push_back(mergedGroup);
+        }
+
+        std::sort(
+            mPersistentAllocationGroups.begin(),
+            mPersistentAllocationGroups.end(),
+            [](const StreamedAllocationGroup& left, const StreamedAllocationGroup& right)
+            {
+                return left.mStartAddress < right.mStartAddress;
+            });
+
+        summary.mAllocationGroups = mPersistentAllocationGroups;
+    }
+
+    std::size_t allocationSearchIndex = 0;
+    for (StreamedAllocationGroup& group : summary.mAllocationGroups)
+    {
+        while (allocationSearchIndex < snapshot.mAllocations.size())
+        {
+            const StreamedAllocation& allocation = snapshot.mAllocations[allocationSearchIndex];
+            if ((allocation.mAddress + allocation.mSize) > group.mStartAddress)
+            {
+                break;
+            }
+            allocationSearchIndex++;
+        }
+
+        const std::size_t firstAllocationIndex = allocationSearchIndex;
+        std::size_t allocationCount = 0;
+        while ((firstAllocationIndex + allocationCount) < snapshot.mAllocations.size())
+        {
+            const StreamedAllocation& allocation = snapshot.mAllocations[firstAllocationIndex + allocationCount];
+            if (allocation.mAddress >= group.mEndAddress)
+            {
+                break;
+            }
+
+            allocationCount++;
+        }
+
+        group.mFirstAllocationIndex = firstAllocationIndex;
+        group.mAllocationCount = allocationCount;
+        allocationSearchIndex = firstAllocationIndex + allocationCount;
     }
 
     // Create a heatmap for each group.

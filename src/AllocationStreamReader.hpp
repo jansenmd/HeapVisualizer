@@ -128,6 +128,8 @@ public:
                             std::uint64_t groupGapBytes,
                             std::uint32_t unusedColor,
                             std::uint32_t usedColor);
+    void ResetPersistentAllocationGroups();
+    void RemovePersistentAllocationGroup(std::uintptr_t startAddress, std::uintptr_t endAddress);
 
     // Start and stop streaming.
     bool Start(const std::string& address, std::uint16_t port, std::string& errorMessage);
@@ -160,7 +162,7 @@ private:
     void ParseStreamingData(std::span<const std::uint8_t> data, std::uint64_t socketReadMicroseconds);
     void AddAllocationToBin(std::vector<StreamedAllocationBin>& bins, const StreamedAllocation& allocation) const;
     void CalculateBinStatistics(StreamedAllocationBin& bin) const;
-    [[nodiscard]] StreamedAllocationSummary BuildAllocationSummary(const StreamedHeapSnapshot& snapshot) const;
+    [[nodiscard]] StreamedAllocationSummary BuildAllocationSummary(const StreamedHeapSnapshot& snapshot);
 
     SummaryHandler mSummaryHandler;
     std::atomic_bool mStreamingActive = false;
@@ -170,5 +172,7 @@ private:
     std::atomic_uint64_t mHeatmapGroupGapBytes = DefaultHeatmapGroupGapBytes;
     std::atomic_uint32_t mHeatmapUnusedColor = DefaultHeatmapUnusedColor;
     std::atomic_uint32_t mHeatmapUsedColor = DefaultHeatmapUsedColor;
+    std::mutex mPersistentAllocationGroupsMutex;
+    std::vector<StreamedAllocationGroup> mPersistentAllocationGroups;
     std::thread mStreamingThread;
 };

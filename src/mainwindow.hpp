@@ -124,6 +124,7 @@ private:
     void UpdateBinsView(const StreamedAllocationSummary& summary);
     void UpdateHeatmapView(const StreamedAllocationSummary& summary);
     void UpdateHeatmapSettings();
+    void ClearEmptyPersistentHeatmapGroups();
     void UpdateSuppressedBinState(std::size_t minimumSize, std::size_t maximumSize, bool suppressed);
     void ShowAboutDialog();
 
@@ -137,13 +138,17 @@ private:
     QScrollArea* mHeatmapScrollArea = nullptr;
     QWidget* mHeatmapContentWidget = nullptr;
     QVBoxLayout* mHeatmapLayout = nullptr;
+    QLabel* mHeatmapRowBytesLabel = nullptr;
     QComboBox* mHeatmapBytesPerPixelComboBox = nullptr;
     QComboBox* mHeatmapGroupGapComboBox = nullptr;
     QPushButton* mHeatmapUnusedColorButton = nullptr;
     QPushButton* mHeatmapUsedColorButton = nullptr;
+    QPushButton* mResetHeatmapGroupsButton = nullptr;
+    QPushButton* mClearEmptyHeatmapGroupsButton = nullptr;
     BusyIndicatorBar* mBusyIndicatorBar = nullptr;
     QLabel* mBusyIndicatorLabel = nullptr;
     AllocationStreamReader mAllocationStreamReader;
+    StreamedAllocationSummary mCurrentHeatmapSummary;
     std::vector<StreamedAllocationBin> mCurrentBins;
     std::set<std::pair<std::size_t, std::size_t>> mSuppressedBins;
     std::uint32_t mHeatmapUnusedColor = DefaultHeatmapUnusedColor;

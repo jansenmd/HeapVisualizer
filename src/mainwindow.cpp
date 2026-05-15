@@ -1281,6 +1281,15 @@ MainWindow::MainWindow(QWidget* parent)
     mHeatmapUnusedColorButton = new ColorSwatchButton(heatmapControlsWidget);
     SetColorButtonStyle(mHeatmapUnusedColorButton, mHeatmapUnusedColor);
 
+    mResetHeatmapGroupsButton = new QPushButton(tr("Heatmap Reset"), heatmapControlsWidget);
+    mResetHeatmapGroupsButton->setToolTip(tr("Clear the persistent heatmap allocation groups."));
+    mResetHeatmapGroupsButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+
+    mClearEmptyHeatmapGroupsButton = new QPushButton(tr("Clear Empty"), heatmapControlsWidget);
+    mClearEmptyHeatmapGroupsButton->setToolTip(tr("Remove all empty persistent heatmap allocation groups."));
+    mClearEmptyHeatmapGroupsButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    mClearEmptyHeatmapGroupsButton->setEnabled(false);
+
     connect(mHeatmapBytesPerPixelComboBox, &QComboBox::currentIndexChanged, this, [this](int)
     {
         UpdateHeatmapSettings();
@@ -1288,6 +1297,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(mHeatmapGroupGapComboBox, &QComboBox::currentIndexChanged, this, [this](int)
     {
         UpdateHeatmapSettings();
+        UpdateHeatmapView({});
     });
     connect(mHeatmapUnusedColorButton, &QPushButton::clicked, this, [this]
     {
@@ -1319,6 +1329,15 @@ MainWindow::MainWindow(QWidget* parent)
         SetColorButtonStyle(mHeatmapUsedColorButton, mHeatmapUsedColor);
         UpdateHeatmapSettings();
     });
+    connect(mResetHeatmapGroupsButton, &QPushButton::clicked, this, [this]
+    {
+        mAllocationStreamReader.ResetPersistentAllocationGroups();
+        UpdateHeatmapView({});
+    });
+    connect(mClearEmptyHeatmapGroupsButton, &QPushButton::clicked, this, [this]
+    {
+        ClearEmptyPersistentHeatmapGroups();
+    });
 
     heatmapControlsLayout->addWidget(bytesPerPixelLabel);
     heatmapControlsLayout->addWidget(mHeatmapBytesPerPixelComboBox);
@@ -1332,7 +1351,13 @@ MainWindow::MainWindow(QWidget* parent)
     heatmapControlsLayout->addWidget(unusedColorLabel);
     heatmapControlsLayout->addWidget(mHeatmapUnusedColorButton);
     heatmapControlsLayout->addStretch(1);
+    heatmapControlsLayout->addWidget(mResetHeatmapGroupsButton, 0, Qt::AlignVCenter);
+    heatmapControlsLayout->addWidget(mClearEmptyHeatmapGroupsButton, 0, Qt::AlignVCenter);
     heatmapLayout->addWidget(heatmapControlsWidget);
+
+    mHeatmapRowBytesLabel = new QLabel(tr("Bytes per row: 0"), heatmapWidget);
+    mHeatmapRowBytesLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    heatmapLayout->addWidget(mHeatmapRowBytesLabel);
 
     mHeatmapScrollArea = new QScrollArea(heatmapWidget);
     mHeatmapScrollArea->setWidgetResizable(true);
@@ -1850,6 +1875,8 @@ void MainWindow::UpdateBinsView(const StreamedAllocationSummary& summary)
 //------------------------------------------------------------------------------
 void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
 {
+    mCurrentHeatmapSummary = summary;
+
     if (mHeatmapLayout == nullptr)
     {
         return;
@@ -1864,15 +1891,20 @@ void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
         delete item;
     }
 
-    mHeatmapLayout->addSpacing(4);
-
-    QLabel* rowBytesLabel = new QLabel(tr("Bytes per row: 0"), mHeatmapContentWidget);
-    rowBytesLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    mHeatmapLayout->addWidget(rowBytesLabel);
+    if (mHeatmapRowBytesLabel != nullptr)
+    {
+        mHeatmapRowBytesLabel->setText(tr("Bytes per row: 0"));
+    }
 
     const std::size_t heatmapCount = std::min(summary.mAllocationGroups.size(), summary.mHeatmaps.size());
+    bool hasEmptyHeatmap = false;
     if (heatmapCount == 0)
     {
+        if (mClearEmptyHeatmapGroupsButton != nullptr)
+        {
+            mClearEmptyHeatmapGroupsButton->setEnabled(false);
+        }
+
         QLabel* emptyLabel = new QLabel(tr("No heatmaps available."), mHeatmapContentWidget);
         emptyLabel->setAlignment(Qt::AlignCenter);
         mHeatmapLayout->addWidget(emptyLabel);
@@ -1885,6 +1917,14 @@ void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
         const StreamedAllocationGroup& group = summary.mAllocationGroups[heatmapIndex];
         const std::vector<std::uint32_t>& heatmap = summary.mHeatmaps[heatmapIndex];
         const std::uint64_t addressSpan = group.mEndAddress - group.mStartAddress;
+        const bool heatmapIsEmpty = std::all_of(
+            heatmap.begin(),
+            heatmap.end(),
+            [&summary](std::uint32_t pixel)
+            {
+                return pixel == summary.mHeatmapUnusedColor;
+            });
+        hasEmptyHeatmap = hasEmptyHeatmap || heatmapIsEmpty;
 
         QFrame* heatmapFrame = new QFrame(mHeatmapContentWidget);
         heatmapFrame->setObjectName(QStringLiteral("HeatmapEntryFrame"));
@@ -1933,7 +1973,7 @@ void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
         HeatmapImageWidget* heatmapWidget = new HeatmapImageWidget(heatmapFrame);
         heatmapWidget->SetHeatmap(heatmap, summary.mHeatmapBytesPerPixel);
         heatmapWidget->SetDimensionsLabel(dimensionsLabel);
-        heatmapWidget->SetRowBytesLabel(rowBytesLabel);
+        heatmapWidget->SetRowBytesLabel(mHeatmapRowBytesLabel);
 
         groupLayout->addWidget(titleLabel);
         groupLayout->addWidget(label);
@@ -1942,7 +1982,64 @@ void MainWindow::UpdateHeatmapView(const StreamedAllocationSummary& summary)
         mHeatmapLayout->addWidget(heatmapFrame);
     }
 
+    if (mClearEmptyHeatmapGroupsButton != nullptr)
+    {
+        mClearEmptyHeatmapGroupsButton->setEnabled(hasEmptyHeatmap);
+    }
+
     mHeatmapLayout->addStretch(1);
+}
+
+
+//------------------------------------------------------------------------------
+// ClearEmptyPersistentHeatmapGroups
+//------------------------------------------------------------------------------
+//  Remove every currently empty heatmap group from persistent reader state and UI.
+//------------------------------------------------------------------------------
+void MainWindow::ClearEmptyPersistentHeatmapGroups()
+{
+    StreamedAllocationSummary updatedSummary = mCurrentHeatmapSummary;
+    const std::size_t heatmapCount = std::min(updatedSummary.mAllocationGroups.size(), updatedSummary.mHeatmaps.size());
+    std::vector<StreamedAllocationGroup> retainedGroups;
+    std::vector<std::vector<std::uint32_t>> retainedHeatmaps;
+    retainedGroups.reserve(updatedSummary.mAllocationGroups.size());
+    retainedHeatmaps.reserve(updatedSummary.mHeatmaps.size());
+
+    for (std::size_t heatmapIndex = 0; heatmapIndex < heatmapCount; heatmapIndex++)
+    {
+        const StreamedAllocationGroup& group = updatedSummary.mAllocationGroups[heatmapIndex];
+        const std::vector<std::uint32_t>& heatmap = updatedSummary.mHeatmaps[heatmapIndex];
+        const bool heatmapIsEmpty = std::all_of(
+            heatmap.begin(),
+            heatmap.end(),
+            [&updatedSummary](std::uint32_t pixel)
+            {
+                return pixel == updatedSummary.mHeatmapUnusedColor;
+            });
+
+        if (heatmapIsEmpty)
+        {
+            mAllocationStreamReader.RemovePersistentAllocationGroup(group.mStartAddress, group.mEndAddress);
+        }
+        else
+        {
+            retainedGroups.push_back(group);
+            retainedHeatmaps.push_back(heatmap);
+        }
+    }
+
+    for (std::size_t heatmapIndex = heatmapCount; heatmapIndex < updatedSummary.mAllocationGroups.size(); heatmapIndex++)
+    {
+        retainedGroups.push_back(updatedSummary.mAllocationGroups[heatmapIndex]);
+    }
+    for (std::size_t heatmapIndex = heatmapCount; heatmapIndex < updatedSummary.mHeatmaps.size(); heatmapIndex++)
+    {
+        retainedHeatmaps.push_back(updatedSummary.mHeatmaps[heatmapIndex]);
+    }
+
+    updatedSummary.mAllocationGroups = std::move(retainedGroups);
+    updatedSummary.mHeatmaps = std::move(retainedHeatmaps);
+    UpdateHeatmapView(updatedSummary);
 }
 
 
